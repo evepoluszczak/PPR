@@ -147,6 +147,9 @@ def page_analyse_visuelle(df):
         "Choisissez une journée à analyser",
         ("Aujourd'hui", "Demain")
     )
+
+    # Case à cocher pour les RWYCHK
+    show_rwy_check = st.checkbox("Mettre en évidence les RWYCHK")
     
     jour_choisi = today if jour_choisi_str == "Aujourd'hui" else tomorrow
     
@@ -161,8 +164,11 @@ def page_analyse_visuelle(df):
         # Extraire l'heure de la colonne Slot.Hour
         df_jour['Heure'] = df_jour['Slot.Hour'].apply(lambda t: t.hour)
 
-        # Compter les arrivées et départs par heure
-        vols_par_heure = df_jour.groupby(['Heure', 'Type de mouvement']).size().unstack(fill_value=0)
+        # Séparer les vols normaux des RWYCHK
+        df_flights = df_jour[df_jour['Call sign'] != 'RWYCHK']
+
+        # Compter les arrivées et départs par heure pour les vols normaux
+        vols_par_heure = df_flights.groupby(['Heure', 'Type de mouvement']).size().unstack(fill_value=0)
         
         # S'assurer que toutes les heures de la journée sont présentes
         vols_par_heure = vols_par_heure.reindex(range(24), fill_value=0)
@@ -173,8 +179,18 @@ def page_analyse_visuelle(df):
         if 'Departure' in vols_par_heure.columns:
             vols_par_heure.rename(columns={'Departure': 'Départs'}, inplace=True)
             
+        # Si la case est cochée, ajouter les données RWYCHK
+        if show_rwy_check:
+            df_rwy = df_jour[df_jour['Call sign'] == 'RWYCHK']
+            if not df_rwy.empty:
+                rwy_par_heure = df_rwy.groupby('Heure').size().rename('RWYCHK')
+                # Combiner les dataframes
+                vols_par_heure = pd.concat([vols_par_heure, rwy_par_heure], axis=1).fillna(0)
+                # S'assurer que le type de colonne est entier pour le graphique
+                vols_par_heure['RWYCHK'] = vols_par_heure['RWYCHK'].astype(int)
+
         st.bar_chart(vols_par_heure)
-        st.write("Ce graphique montre le nombre total de vols (PPR) prévus pour chaque heure de la journée sélectionnée, séparés par type de mouvement (arrivées et départs).")
+        st.write("Ce graphique montre le nombre total de vols (PPR) prévus pour chaque heure de la journée sélectionnée, séparés par type de mouvement.")
 
 # --- Interface principale de l'application ---
 
