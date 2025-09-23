@@ -32,19 +32,21 @@ def process_ppr_data(df):
         df_copy['Slot.Date'] = pd.to_datetime(df_copy['Slot.Date'], errors='coerce').dt.date
         df_copy['Date / Heure Creation'] = pd.to_datetime(df_copy['Date / Heure Creation'], errors='coerce')
         
-        df_copy.dropna(subset=['Slot.Date', 'Call sign', 'Immatriculation'], inplace=True)
+        df_copy.dropna(subset=['Slot.Date', 'Immatriculation'], inplace=True)
 
         active_ppr = df_copy[df_copy['Login (Suppression)'].isnull()].copy()
 
         # --- 2. Détection des doublons (Logique simple) ---
-
-        group_cols = ['Slot.Date', 'Call sign', 'Immatriculation']
+        # Correction: On groupe par Immatriculation et Date, sans le Call sign
+        group_cols = ['Slot.Date', 'Immatriculation']
         
         active_ppr['Nb de lignes'] = active_ppr.groupby(group_cols)['Slot.Date'].transform('count')
         
         duplicates = active_ppr[active_ppr['Nb de lignes'] > 1].copy()
 
-        duplicates = duplicates[duplicates['Call sign'] != 'RWYCHK']
+        # On filtre toujours les RWYCHK s'ils existent
+        if 'Call sign' in duplicates.columns:
+            duplicates = duplicates[duplicates['Call sign'] != 'RWYCHK']
 
         today = date.today()
         tomorrow = today + timedelta(days=1)
@@ -105,15 +107,18 @@ if uploaded_file is not None:
             'CallSign': 'Call sign',
             'Registration': 'Immatriculation'
         })
-        datetime_col = pd.to_datetime(raw_df['Date'], errors='coerce')
+        # Correction: Ajout de dayfirst=True pour une lecture de date plus fiable
+        datetime_col = pd.to_datetime(raw_df['Date'], errors='coerce', dayfirst=True)
         raw_df['Slot.Date'] = datetime_col.dt.date
         raw_df['Slot.Hour'] = datetime_col.dt.time
         raw_df['Date / Heure Creation'] = datetime_col
         raw_df['Login (Suppression)'] = None
         raw_df.loc[raw_df['Deleted'] == True, 'Login (Suppression)'] = 'Deleted'
         
-        movement_map = {'A': 'Arrival', 'D': 'Departure'}
+        # MODIFICATION: Utiliser la logique booléenne pour 'MovementTypeId'
         if 'MovementTypeId' in raw_df.columns:
+             # TRUE pour Arrivée, FALSE pour Départ
+             movement_map = {True: 'Arrival', False: 'Departure'}
              raw_df['Type de mouvement'] = raw_df['MovementTypeId'].map(movement_map)
 
     except Exception as e:
@@ -137,12 +142,13 @@ if uploaded_file is not None:
         
         num_groups = 0
         if not result_df.empty:
-            num_groups = len(result_df.groupby(['Slot.Date', 'Call sign', 'Immatriculation']))
+            # Correction: Le calcul du nombre de groupes se base maintenant sur les bonnes colonnes
+            num_groups = len(result_df.groupby(['Slot.Date', 'Immatriculation']))
             
         col1, col2, col3 = st.columns(3)
         col1.metric("PPR prévus aujourd'hui", ppr_today_count)
         col2.metric("PPR prévus demain", ppr_tomorrow_count)
-        col3.metric("Groupes de doublons", num_groups, help="Nombre de groupes (Date, Call sign, Immat.) avec des doublons problématiques.")
+        col3.metric("Groupes de doublons", num_groups, help="Nombre de groupes (Date, Immat.) avec des doublons problématiques.")
 
         # --- Section Analyse des Doublons ---
         st.header("🚨 Analyse des Doublons")
