@@ -177,14 +177,26 @@ if uploaded_file is not None:
         active_ppr_j0_j1 = active_ppr_full[active_ppr_full['Slot.Date'].isin([today, tomorrow])].copy()
         active_ppr_j0_j1.sort_values(by=['Slot.Date', 'Immatriculation', 'Slot.Hour'], inplace=True)
         
-        with st.expander("Afficher/Masquer la liste complète des vols"):
-            if active_ppr_j0_j1.empty:
-                st.info("Aucun PPR actif trouvé pour aujourd'hui ou demain.")
+        with st.expander("Afficher/Masquer la liste complète des vols", expanded=True):
+            
+            filter_text = st.text_input("Filtrer la liste (par immatriculation, call sign, agent, etc.) :", placeholder="Ex: HBLVK, T7-SCT, SFS...")
+
+            display_cols = ['Slot.Date', 'Immatriculation', 'Call sign', 'Slot.Hour', 'Type de mouvement', 'HandlingAgentName', 'OwnerProfileLogin']
+            display_cols_exist = [col for col in display_cols if col in active_ppr_j0_j1.columns]
+            
+            filtered_list = active_ppr_j0_j1
+            if filter_text:
+                # Créer un masque booléen pour le filtrage sur plusieurs colonnes
+                mask = np.column_stack([
+                    filtered_list[col].astype(str).str.contains(filter_text, case=False, na=False) 
+                    for col in display_cols_exist
+                ])
+                filtered_list = filtered_list[mask.any(axis=1)]
+
+            if filtered_list.empty:
+                st.warning("Aucun vol ne correspond à votre recherche.")
             else:
-                display_cols = ['Slot.Date', 'Immatriculation', 'Call sign', 'Slot.Hour', 'Type de mouvement', 'HandlingAgentName', 'OwnerProfileLogin']
-                # Filtrer les colonnes pour n'afficher que celles qui existent dans le dataframe
-                display_cols_exist = [col for col in display_cols if col in active_ppr_j0_j1.columns]
-                st.dataframe(active_ppr_j0_j1[display_cols_exist])
+                st.dataframe(filtered_list[display_cols_exist])
 
 else:
     st.info("En attente du chargement d'un fichier.")
