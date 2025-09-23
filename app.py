@@ -91,7 +91,7 @@ if uploaded_file is not None:
     try:
         # --- Normalisation des données selon le type de fichier ---
         if uploaded_file.name.lower().endswith('.csv'):
-            raw_df = pd.read_csv(uploaded_file, sep=';')
+            raw_df = pd.read_csv(uploaded_file, sep=';', encoding='latin-1')
             # Renommer les colonnes pour correspondre au format standard
             raw_df = raw_df.rename(columns={
                 'CallSign': 'Call sign',
