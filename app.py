@@ -95,24 +95,37 @@ def page_detection_doublons(df):
     
     result_df = process_ppr_data(df)
     
-    num_groups = 0
+    # Correction: Le compteur se base sur le nombre d'anomalies (paires) et non de groupes
+    num_anomalies = 0
     if not result_df.empty:
-        num_groups = len(result_df.groupby(['Slot.Date', 'Immatriculation']))
+        # Une anomalie est une ligne où un 'Check' a été appliqué
+        num_anomalies = result_df[result_df['Check'] != ''].shape[0]
         
     col1, col2, col3 = st.columns(3)
     col1.metric("PPR prévus aujourd'hui", ppr_today_count)
     col2.metric("PPR prévus demain", ppr_tomorrow_count)
-    col3.metric("Groupes de doublons", num_groups, help="Nombre de groupes (Date, Immat.) avec des doublons problématiques.")
+    col3.metric("Anomalies détectées", num_anomalies, help="Nombre de paires de vols problématiques (horaires identiques ou mouvements identiques consécutifs).")
 
     # --- Section Analyse des Doublons ---
     st.header("🚨 Analyse des Doublons")
-    if not result_df.empty:
-        st.success(f"**{num_groups}** groupe(s) de doublons problématiques détecté(s) !")
+    if num_anomalies > 0:
+        # Correction: Le message de succès utilise aussi le nombre d'anomalies
+        st.success(f"**{num_anomalies}** anomalie(s) détectée(s) !")
         summary_df = result_df[result_df['Check'] != ''].copy()
         display_df = summary_df.rename(columns={'Slot.Date': 'Date du vol', 'Call sign': 'CallSign', 'Slot.Hour': 'Slot 1', 'Next_Slot.Hour': 'Slot 2', 'Type de mouvement': 'MovementType', 'OwnerProfileLogin': 'Login'})
         display_cols = ['Date du vol', 'Immatriculation', 'CallSign', 'Slot 1', 'Slot 2', 'MovementType', 'Login']
         display_cols_exist = [col for col in display_cols if col in display_df.columns]
-        st.dataframe(display_df[display_cols_exist])
+        
+        def highlight_same_slot(row):
+            """Met en évidence les lignes où Slot 1 et Slot 2 sont identiques."""
+            # Mettre en rouge si Slot 1 et Slot 2 sont identiques (et non nuls)
+            if pd.notna(row['Slot 1']) and pd.notna(row['Slot 2']) and row['Slot 1'] == row['Slot 2']:
+                return ['background-color: #ffcccc'] * len(row.index) # Rouge clair
+            else:
+                return [''] * len(row.index)
+
+        # Appliquer le style avant l'affichage
+        st.dataframe(display_df[display_cols_exist].style.apply(highlight_same_slot, axis=1))
         
         st.download_button(label="📥 Télécharger les résultats complets de l'analyse en CSV", data=result_df.to_csv(index=False, sep=';').encode('utf-8'), file_name=f"ppr_doublons_details_{date.today()}.csv", mime="text/csv")
     else:
