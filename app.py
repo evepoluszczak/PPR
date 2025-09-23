@@ -11,8 +11,8 @@ st.set_page_config(
 )
 
 # Titre de l'application
-st.title("✈️ Outil de détection des PPR en doublon")
-st.markdown("Cette application identifie les réservations PPR (Prior Permission Required) qui semblent être des doublons pour **aujourd'hui** et **demain**.")
+st.title("✈️ Outil de détection et de suivi des PPR")
+st.markdown("Chargez le fichier des réservations pour obtenir une vue d'ensemble des vols et identifier les doublons pour **aujourd'hui** et **demain**.")
 
 def process_ppr_data(df):
     """
@@ -28,12 +28,13 @@ def process_ppr_data(df):
     try:
         # --- 1. Nettoyage et préparation ---
         
-        df['Slot.Date'] = pd.to_datetime(df['Slot.Date'], errors='coerce').dt.date
-        df['Date / Heure Creation'] = pd.to_datetime(df['Date / Heure Creation'], errors='coerce')
+        df_copy = df.copy() # Travailler sur une copie pour éviter les effets de bord
+        df_copy['Slot.Date'] = pd.to_datetime(df_copy['Slot.Date'], errors='coerce').dt.date
+        df_copy['Date / Heure Creation'] = pd.to_datetime(df_copy['Date / Heure Creation'], errors='coerce')
         
-        df.dropna(subset=['Slot.Date', 'Call sign', 'Immatriculation'], inplace=True)
+        df_copy.dropna(subset=['Slot.Date', 'Call sign', 'Immatriculation'], inplace=True)
 
-        active_ppr = df[df['Login (Suppression)'].isnull()].copy()
+        active_ppr = df_copy[df_copy['Login (Suppression)'].isnull()].copy()
 
         # --- 2. Détection des doublons (Logique simple) ---
 
@@ -57,31 +58,22 @@ def process_ppr_data(df):
 
         # --- 3. Analyse fine des doublons (Logique avancée) ---
 
-        # Trier les groupes par heure pour comparer les vols consécutifs
         duplicates.sort_values(by=group_cols + ['Slot.Hour'], inplace=True)
 
-        # Créer des colonnes décalées pour comparer une ligne avec la suivante dans le même groupe
         duplicates['Next_Slot.Hour'] = duplicates.groupby(group_cols)['Slot.Hour'].shift(-1)
         duplicates['Next_Type de mouvement'] = duplicates.groupby(group_cols)['Type de mouvement'].shift(-1)
 
-        # Identifier les paires problématiques
-        # Une paire est "Double" si les types de mouvement sont identiques
         is_double = (duplicates['Type de mouvement'] == duplicates['Next_Type de mouvement']) & duplicates['Next_Type de mouvement'].notna()
-        # Une paire est "Erreur" si les heures sont identiques
         is_error = (duplicates['Slot.Hour'] == duplicates['Next_Slot.Hour']) & duplicates['Next_Slot.Hour'].notna()
 
-        # Créer une colonne 'Check' pour marquer la première ligne de chaque paire problématique
         duplicates['Check'] = ''
         duplicates.loc[is_double, 'Check'] = 'Double'
         duplicates.loc[is_error, 'Check'] = 'Erreur'
 
-        # Un groupe est problématique s'il contient au moins une paire problématique
         duplicates['is_problematic_group'] = duplicates.groupby(group_cols)['Check'].transform(lambda x: (x != '').any())
 
-        # Ne garder que les groupes complets qui ont été identifiés comme problématiques
         final_result = duplicates[duplicates['is_problematic_group']].copy()
 
-        # Nettoyer les colonnes temporaires avant l'affichage
         final_result.drop(columns=[
             'Next_Slot.Hour', 
             'Next_Type de mouvement', 
@@ -99,8 +91,8 @@ def process_ppr_data(df):
 # --- Interface utilisateur ---
 
 uploaded_file = st.file_uploader(
-    "1. Choisissez le fichier Excel (`PBI_PPR_EPL.xlsx`) ou CSV (`Reservations.csv`)",
-    type=['xlsx', 'xls', 'csv']
+    "1. Choisissez le fichier CSV (`Reservations.csv`)",
+    type=['csv']
 )
 
 if uploaded_file is not None:
@@ -108,54 +100,57 @@ if uploaded_file is not None:
     
     raw_df = None
     try:
-        if uploaded_file.name.lower().endswith('.csv'):
-            raw_df = pd.read_csv(uploaded_file, sep=';', encoding='latin-1')
-            raw_df = raw_df.rename(columns={
-                'CallSign': 'Call sign',
-                'Registration': 'Immatriculation'
-            })
-            datetime_col = pd.to_datetime(raw_df['Date'], errors='coerce')
-            raw_df['Slot.Date'] = datetime_col.dt.date
-            raw_df['Slot.Hour'] = datetime_col.dt.time
-            raw_df['Date / Heure Creation'] = datetime_col
-            raw_df['Login (Suppression)'] = None
-            raw_df.loc[raw_df['Deleted'] == True, 'Login (Suppression)'] = 'Deleted'
-            
-            # Ajout de la colonne 'Type de mouvement' pour les fichiers CSV
-            movement_map = {'A': 'Arrival', 'D': 'Departure'}
-            if 'MovementTypeId' in raw_df.columns:
-                 raw_df['Type de mouvement'] = raw_df['MovementTypeId'].map(movement_map)
-
-        elif uploaded_file.name.lower().endswith(('.xls', '.xlsx')):
-            excel_df = pd.read_excel(uploaded_file, sheet_name="PBI_PPR_J0_J5", header=None)
-            excel_df.columns = excel_df.iloc[0]
-            raw_df = excel_df.drop(excel_df.index[0]).reset_index(drop=True)
-            raw_df = raw_df.rename(columns={
-                "Slot Réservation.Date": "Slot.Date",
-                "Heure": "Slot.Hour"
-            })
+        raw_df = pd.read_csv(uploaded_file, sep=';', encoding='latin-1')
+        raw_df = raw_df.rename(columns={
+            'CallSign': 'Call sign',
+            'Registration': 'Immatriculation'
+        })
+        datetime_col = pd.to_datetime(raw_df['Date'], errors='coerce')
+        raw_df['Slot.Date'] = datetime_col.dt.date
+        raw_df['Slot.Hour'] = datetime_col.dt.time
+        raw_df['Date / Heure Creation'] = datetime_col
+        raw_df['Login (Suppression)'] = None
+        raw_df.loc[raw_df['Deleted'] == True, 'Login (Suppression)'] = 'Deleted'
+        
+        movement_map = {'A': 'Arrival', 'D': 'Departure'}
+        if 'MovementTypeId' in raw_df.columns:
+             raw_df['Type de mouvement'] = raw_df['MovementTypeId'].map(movement_map)
 
     except Exception as e:
-        if "Worksheet named 'PBI_PPR_J0_J5' not found" in str(e):
-              st.error("Erreur : La feuille nommée `PBI_PPR_J0_J5` n'a pas été trouvée. Veuillez vérifier le fichier Excel.")
-        else:
-            st.error(f"Erreur lors de la lecture du fichier : {e}")
+        st.error(f"Erreur lors de la lecture du fichier : {e}")
         raw_df = None
     
     if raw_df is not None:
-        result_df = process_ppr_data(raw_df)
+        # --- Calcul des KPIs et affichage ---
+        st.header("📊 Tableau de bord")
 
-        st.header("2. Résultats de l'analyse")
+        today = date.today()
+        tomorrow = today + timedelta(days=1)
+        
+        active_ppr_full = raw_df[raw_df['Login (Suppression)'].isnull()].copy()
+        active_ppr_full['Slot.Date'] = pd.to_datetime(active_ppr_full['Slot.Date']).dt.date
+        
+        ppr_today_count = active_ppr_full[active_ppr_full['Slot.Date'] == today].shape[0]
+        ppr_tomorrow_count = active_ppr_full[active_ppr_full['Slot.Date'] == tomorrow].shape[0]
+        
+        result_df = process_ppr_data(raw_df)
+        
+        num_groups = 0
+        if not result_df.empty:
+            num_groups = len(result_df.groupby(['Slot.Date', 'Call sign', 'Immatriculation']))
+            
+        col1, col2, col3 = st.columns(3)
+        col1.metric("PPR prévus aujourd'hui", ppr_today_count)
+        col2.metric("PPR prévus demain", ppr_tomorrow_count)
+        col3.metric("Groupes de doublons", num_groups, help="Nombre de groupes (Date, Call sign, Immat.) avec des doublons problématiques.")
+
+        # --- Section Analyse des Doublons ---
+        st.header("🚨 Analyse des Doublons")
 
         if not result_df.empty:
-            group_cols = ['Slot.Date', 'Call sign', 'Immatriculation']
-            num_groups = len(result_df.groupby(group_cols))
-
             st.success(f"**{num_groups}** groupe(s) de doublons problématiques détecté(s) !")
-            
             st.dataframe(result_df)
             
-            st.markdown("---")
             st.write("### Actions recommandées :")
             st.write("- **Examinez** les groupes où une ligne est marquée `Double` ou `Erreur` dans la colonne `Check`.")
             st.write("- La marque indique que cette ligne et la **suivante** forment une paire problématique.")
@@ -168,13 +163,29 @@ if uploaded_file is not None:
             csv = convert_df_to_csv(result_df)
 
             st.download_button(
-               label="📥 Télécharger les résultats en CSV",
+               label="📥 Télécharger les résultats de l'analyse en CSV",
                data=csv,
                file_name=f"ppr_doublons_{date.today()}.csv",
                mime="text/csv",
             )
         else:
             st.success("🎉 Aucune PPR en doublon problématique détectée pour aujourd'hui et demain.")
+
+        # --- Section Liste Complète ---
+        st.header("📋 Liste des PPR Actifs (Aujourd'hui et Demain)")
+        
+        active_ppr_j0_j1 = active_ppr_full[active_ppr_full['Slot.Date'].isin([today, tomorrow])].copy()
+        active_ppr_j0_j1.sort_values(by=['Slot.Date', 'Immatriculation', 'Slot.Hour'], inplace=True)
+        
+        with st.expander("Afficher/Masquer la liste complète des vols"):
+            if active_ppr_j0_j1.empty:
+                st.info("Aucun PPR actif trouvé pour aujourd'hui ou demain.")
+            else:
+                display_cols = ['Slot.Date', 'Immatriculation', 'Call sign', 'Slot.Hour', 'Type de mouvement', 'HandlingAgentName', 'OwnerProfileLogin']
+                # Filtrer les colonnes pour n'afficher que celles qui existent dans le dataframe
+                display_cols_exist = [col for col in display_cols if col in active_ppr_j0_j1.columns]
+                st.dataframe(active_ppr_j0_j1[display_cols_exist])
+
 else:
     st.info("En attente du chargement d'un fichier.")
 
