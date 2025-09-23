@@ -76,9 +76,8 @@ def process_ppr_data(df):
 
         final_result = duplicates[duplicates['is_problematic_group']].copy()
 
+        # On ne supprime que la colonne de travail, on garde les colonnes 'Next_' pour le résumé
         final_result.drop(columns=[
-            'Next_Slot.Hour', 
-            'Next_Type de mouvement', 
             'is_problematic_group'
         ], inplace=True)
         
@@ -155,23 +154,43 @@ if uploaded_file is not None:
 
         if not result_df.empty:
             st.success(f"**{num_groups}** groupe(s) de doublons problématiques détecté(s) !")
-            st.dataframe(result_df)
+            
+            # --- Création du résumé pour l'affichage ---
+            summary_df = result_df[result_df['Check'] != ''].copy() # On ne prend que les débuts de paires problématiques
+            
+            # Renommage des colonnes pour un affichage clair
+            display_df = summary_df.rename(columns={
+                'Slot.Date': 'Date du vol',
+                'Call sign': 'CallSign',
+                'Slot.Hour': 'Slot 1',
+                'Next_Slot.Hour': 'Slot 2',
+                'Type de mouvement': 'MovementType',
+                'OwnerProfileLogin': 'Login'
+            })
+
+            # Sélection des colonnes à afficher
+            display_cols = ['Date du vol', 'Immatriculation', 'CallSign', 'Slot 1', 'Slot 2', 'MovementType', 'Login']
+            
+            # Filtrer pour ne garder que les colonnes qui existent réellement dans le dataframe
+            display_cols_exist = [col for col in display_cols if col in display_df.columns]
+            
+            st.dataframe(display_df[display_cols_exist])
             
             st.write("### Actions recommandées :")
-            st.write("- **Examinez** les groupes où une ligne est marquée `Double` ou `Erreur` dans la colonne `Check`.")
-            st.write("- La marque indique que cette ligne et la **suivante** forment une paire problématique.")
-            st.write("- **Contactez** les utilisateurs concernés pour régulariser la situation.")
+            st.write("- **Examinez** chaque ligne qui représente une paire de vols problématique (soit deux mouvements identiques, soit deux horaires identiques).")
+            st.write("- **Contactez** les utilisateurs concernés (`Login`) pour régulariser la situation.")
 
             @st.cache_data
             def convert_df_to_csv(df):
+                # Le téléchargement contient toujours les données complètes pour analyse
                 return df.to_csv(index=False, sep=';').encode('utf-8')
 
             csv = convert_df_to_csv(result_df)
 
             st.download_button(
-               label="📥 Télécharger les résultats de l'analyse en CSV",
+               label="📥 Télécharger les résultats complets de l'analyse en CSV",
                data=csv,
-               file_name=f"ppr_doublons_{date.today()}.csv",
+               file_name=f"ppr_doublons_details_{date.today()}.csv",
                mime="text/csv",
             )
         else:
