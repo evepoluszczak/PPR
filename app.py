@@ -95,10 +95,8 @@ def page_detection_doublons(df):
     
     result_df = process_ppr_data(df)
     
-    # Correction: Le compteur se base sur le nombre d'anomalies (paires) et non de groupes
     num_anomalies = 0
     if not result_df.empty:
-        # Une anomalie est une ligne où un 'Check' a été appliqué
         num_anomalies = result_df[result_df['Check'] != ''].shape[0]
         
     col1, col2, col3 = st.columns(3)
@@ -108,8 +106,8 @@ def page_detection_doublons(df):
 
     # --- Section Analyse des Doublons ---
     st.header("🚨 Analyse des Doublons")
+    summary_df = pd.DataFrame() # Initialiser summary_df
     if num_anomalies > 0:
-        # Correction: Le message de succès utilise aussi le nombre d'anomalies
         st.success(f"**{num_anomalies}** anomalie(s) détectée(s) !")
         summary_df = result_df[result_df['Check'] != ''].copy()
         display_df = summary_df.rename(columns={'Slot.Date': 'Date du vol', 'Call sign': 'CallSign', 'Slot.Hour': 'Slot 1', 'Next_Slot.Hour': 'Slot 2', 'Type de mouvement': 'MovementType', 'OwnerProfileLogin': 'Login'})
@@ -117,19 +115,50 @@ def page_detection_doublons(df):
         display_cols_exist = [col for col in display_cols if col in display_df.columns]
         
         def highlight_same_slot(row):
-            """Met en évidence les lignes où Slot 1 et Slot 2 sont identiques."""
-            # Mettre en rouge si Slot 1 et Slot 2 sont identiques (et non nuls)
             if pd.notna(row['Slot 1']) and pd.notna(row['Slot 2']) and row['Slot 1'] == row['Slot 2']:
-                return ['background-color: #ffcccc'] * len(row.index) # Rouge clair
+                return ['background-color: #ffcccc'] * len(row.index)
             else:
                 return [''] * len(row.index)
 
-        # Appliquer le style avant l'affichage
         st.dataframe(display_df[display_cols_exist].style.apply(highlight_same_slot, axis=1))
         
         st.download_button(label="📥 Télécharger les résultats complets de l'analyse en CSV", data=result_df.to_csv(index=False, sep=';').encode('utf-8'), file_name=f"ppr_doublons_details_{date.today()}.csv", mime="text/csv")
     else:
         st.success("🎉 Aucune PPR en doublon problématique détectée pour aujourd'hui et demain.")
+
+    # --- Section Génération de Mail ---
+    st.header("📧 Générer les mails de correction")
+    if st.button("Générer le texte pour chaque utilisateur"):
+        if num_anomalies > 0 and not summary_df.empty:
+            logins_to_notify = summary_df['OwnerProfileLogin'].dropna().unique()
+
+            if len(logins_to_notify) > 0:
+                for login in logins_to_notify:
+                    with st.expander(f"Mail pour {login}"):
+                        user_anomalies = summary_df[summary_df['OwnerProfileLogin'] == login]
+                        
+                        mail_body_lines = ["Bonjour,", "\nNos systèmes ont détecté les anomalies suivantes dans vos réservations PPR. Pourriez-vous s'il vous plaît les corriger ?\n"]
+                        
+                        for index, row in user_anomalies.iterrows():
+                            reason = ""
+                            if row['Check'] == 'Erreur':
+                                reason = "Horaires identiques"
+                            elif row['Check'] == 'Double':
+                                reason = f"Deux '{row['Type de mouvement']}' consécutifs"
+                            
+                            line = (f"- Immat: {row['Immatriculation']}, CallSign: {row.get('Call sign', 'N/A')}, "
+                                    f"Slots: {row['Slot.Hour']} & {row['Next_Slot.Hour']} -> Motif: {reason}")
+                            mail_body_lines.append(line)
+
+                        mail_body_lines.extend(["\nMerci de votre collaboration.", "Cordialement,"])
+                        
+                        full_mail_text = "\n".join(mail_body_lines)
+                        st.text_area("Texte à copier :", full_mail_text, height=250, key=f"mail_{login.replace('.', '_')}")
+            else:
+                st.write("Aucun login associé aux anomalies détectées.")
+        else:
+            st.info("Aucune anomalie à signaler, pas de mail à générer.")
+
 
     # --- Section Liste Complète ---
     st.header("📋 Liste des PPR Actifs (Aujourd'hui et Demain)")
@@ -155,67 +184,41 @@ def page_analyse_visuelle(df):
     active_ppr = df[df['Login (Suppression)'].isnull()].copy()
     active_ppr['Slot.Date'] = pd.to_datetime(active_ppr['Slot.Date']).dt.date
     
-    # Filtre de date pour les graphiques
-    jour_choisi_str = st.selectbox(
-        "Choisissez une journée à analyser",
-        ("Aujourd'hui", "Demain")
-    )
-
-    # Case à cocher pour les RWYCHK
+    jour_choisi_str = st.selectbox("Choisissez une journée à analyser", ("Aujourd'hui", "Demain"))
     show_rwy_check = st.checkbox("Mettre en évidence les RWYCHK")
-    
     jour_choisi = today if jour_choisi_str == "Aujourd'hui" else tomorrow
     
     st.header(f"Nombre de vols par heure pour le {jour_choisi.strftime('%d/%m/%Y')}")
 
-    # Préparation des données pour le graphique
     df_jour = active_ppr[active_ppr['Slot.Date'] == jour_choisi].copy()
 
     if df_jour.empty:
         st.warning(f"Aucun vol prévu pour le {jour_choisi.strftime('%d/%m/%Y')}.")
     else:
-        # Extraire l'heure de la colonne Slot.Hour
         df_jour['Heure'] = df_jour['Slot.Hour'].apply(lambda t: t.hour)
-
-        # Séparer les vols normaux des RWYCHK
         df_flights = df_jour[df_jour['Call sign'] != 'RWYCHK']
-
-        # Compter les arrivées et départs par heure pour les vols normaux
         vols_par_heure = df_flights.groupby(['Heure', 'Type de mouvement']).size().unstack(fill_value=0)
-        
-        # S'assurer que toutes les heures de la journée sont présentes
         vols_par_heure = vols_par_heure.reindex(range(24), fill_value=0)
         
-        # Renommer les colonnes pour la légende
         if 'Arrival' in vols_par_heure.columns:
             vols_par_heure.rename(columns={'Arrival': 'Arrivées'}, inplace=True)
         if 'Departure' in vols_par_heure.columns:
             vols_par_heure.rename(columns={'Departure': 'Départs'}, inplace=True)
             
-        # Si la case est cochée, ajouter les données RWYCHK
         if show_rwy_check:
             df_rwy = df_jour[df_jour['Call sign'] == 'RWYCHK']
             if not df_rwy.empty:
                 rwy_par_heure = df_rwy.groupby('Heure').size().rename('RWYCHK')
-                # Combiner les dataframes
                 vols_par_heure = pd.concat([vols_par_heure, rwy_par_heure], axis=1).fillna(0)
-                # S'assurer que le type de colonne est entier pour le graphique
                 vols_par_heure['RWYCHK'] = vols_par_heure['RWYCHK'].astype(int)
 
         st.bar_chart(vols_par_heure)
         st.write("Ce graphique montre le nombre total de vols (PPR) prévus pour chaque heure de la journée sélectionnée, séparés par type de mouvement.")
 
 # --- Interface principale de l'application ---
-
-# Barre de navigation latérale
 st.sidebar.title("Navigation")
 page = st.sidebar.radio("Choisissez une page", ["Détection Doublons", "Analyse & Visualisations"])
-
-# Zone de chargement de fichier principale
-uploaded_file = st.sidebar.file_uploader(
-    "Choisissez le fichier CSV (`Reservations.csv`)",
-    type=['csv']
-)
+uploaded_file = st.sidebar.file_uploader("Choisissez le fichier CSV (`Reservations.csv`)", type=['csv'])
 
 if uploaded_file is not None:
     prepared_data = load_and_prepare_data(uploaded_file)
