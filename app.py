@@ -12,6 +12,12 @@ st.set_page_config(
     layout="wide"
 )
 
+# --- Initialisation de l'état de session ---
+if 'ppr_data' not in st.session_state:
+    st.session_state.ppr_data = None
+if 'scr_data' not in st.session_state:
+    st.session_state.scr_data = None
+
 # --- Fichiers de données statiques ---
 CAPACITIES_FILE = 'capacities.xlsx'
 
@@ -225,62 +231,107 @@ def page_saturation_piste(ppr_df, scr_df):
         return
     capacity_day_df = capacity_day_df.set_index('Heure')[['Capacité Totale', 'Capacité Arrivées']]
 
+    # --- PPR Counts (Total and Arrivals) ---
     ppr_df['Slot.Date'] = pd.to_datetime(ppr_df['Slot.Date']).dt.date
     ppr_jour = ppr_df[ppr_df['Slot.Date'] == jour_choisi].copy()
     ppr_jour['Heure'] = ppr_jour['Slot.Hour'].apply(lambda t: t.hour)
     ppr_counts = ppr_jour.groupby('Heure').size().rename('Vols PPR')
+    ppr_arrivals = ppr_jour[ppr_jour['Type de mouvement'] == 'Arrival']
+    ppr_arrival_counts = ppr_arrivals.groupby('Heure').size().rename('Vols PPR Arrivées')
 
+    # --- SCR Counts (Total and Arrivals) ---
     scr_df['Slot.Date'] = pd.to_datetime(scr_df['Slot.Date']).dt.date
     scr_jour = scr_df[scr_df['Slot.Date'] == jour_choisi].copy()
     if not scr_jour.empty:
         scr_counts = scr_jour.groupby('Heure')['Rotation'].sum().rename('Vols SCR')
+        scr_arrivals = scr_jour[scr_jour['Arrival - Departure'] == 'Arrival']
+        scr_arrival_counts = scr_arrivals.groupby('Heure')['Rotation'].sum().rename('Vols SCR Arrivées')
     else:
         scr_counts = pd.Series(name='Vols SCR', dtype=int)
+        scr_arrival_counts = pd.Series(name='Vols SCR Arrivées', dtype=int)
 
+    # --- Combine DataFrames ---
     analysis_df = pd.DataFrame(index=range(24))
     analysis_df = analysis_df.join(capacity_day_df)
     analysis_df = analysis_df.join(ppr_counts)
+    analysis_df = analysis_df.join(ppr_arrival_counts)
     analysis_df = analysis_df.join(scr_counts)
+    analysis_df = analysis_df.join(scr_arrival_counts)
     analysis_df.fillna(0, inplace=True)
+
+    # --- Calculate Totals and Residuals ---
     analysis_df['Total Vols'] = analysis_df['Vols PPR'] + analysis_df['Vols SCR']
-    analysis_df['Capacité Résiduelle'] = analysis_df['Capacité Totale'] - analysis_df['Total Vols']
+    analysis_df['Total Vols Arrivées'] = analysis_df['Vols PPR Arrivées'] + analysis_df['Vols SCR Arrivées']
+    analysis_df['Capacité Résiduelle Totale'] = analysis_df['Capacité Totale'] - analysis_df['Total Vols']
+    analysis_df['Capacité Résiduelle Arrivées'] = analysis_df['Capacité Arrivées'] - analysis_df['Total Vols Arrivées']
     analysis_df = analysis_df.astype(int)
 
-    st.subheader("Graphique de charge de la piste")
+    # --- Sélecteur d'analyse ---
+    analysis_type = st.radio(
+        "Choisissez le type d'analyse à visualiser",
+        ("Totale", "Arrivées"),
+        horizontal=True
+    )
     
-    # Préparation des données pour le graphique Altair
+    st.subheader(f"Graphique de charge de la piste ({analysis_type})")
+
+    # Data preparation based on selection
+    if analysis_type == "Totale":
+        value_vars = ['Vols PPR', 'Vols SCR']
+        capacity_col = 'Capacité Totale'
+        title = f"Charge Totale vs. Capacité ({jour_choisi.strftime('%d/%m/%Y')})"
+        residual_col = 'Capacité Résiduelle Totale'
+    else: # Arrivées
+        value_vars = ['Vols PPR Arrivées', 'Vols SCR Arrivées']
+        capacity_col = 'Capacité Arrivées'
+        title = f"Charge Arrivées vs. Capacité ({jour_choisi.strftime('%d/%m/%Y')})"
+        residual_col = 'Capacité Résiduelle Arrivées'
+
+    # Melted data for stacked bar chart
     source = analysis_df.reset_index().rename(columns={'index': 'Heure'})
     source_melted = source.melt(
-        id_vars=['Heure', 'Capacité Totale'],
-        value_vars=['Vols PPR', 'Vols SCR'],
+        id_vars=['Heure', capacity_col],
+        value_vars=value_vars,
         var_name='Type de Vol',
         value_name='Nombre de Vols'
     )
 
-    # Création du graphique en barres empilées
+    # Stacked bar chart
     bars = alt.Chart(source_melted).mark_bar().encode(
         x=alt.X('Heure:O', title='Heure', axis=alt.Axis(labelAngle=0)),
         y=alt.Y('sum(Nombre de Vols):Q', title='Nombre de Vols'),
-        color=alt.Color('Type de Vol:N', title='Type de Vol', scale=alt.Scale(domain=['Vols PPR', 'Vols SCR'], range=['#1f77b4', '#ff7f0e'])),
+        color=alt.Color('Type de Vol:N', title='Type de Vol'),
         tooltip=['Heure', 'Type de Vol', 'sum(Nombre de Vols)']
     )
 
-    # Création de la ligne de capacité
+    # Capacity line
     line = alt.Chart(source).mark_line(color='red', strokeDash=[5,5], size=3).encode(
         x=alt.X('Heure:O'),
-        y=alt.Y('Capacité Totale:Q'),
-        tooltip=['Heure', 'Capacité Totale']
+        y=alt.Y(f'{capacity_col}:Q', title=capacity_col),
+        tooltip=['Heure', f'{capacity_col}']
     )
-    
-    # Combinaison des deux graphiques
-    chart = (bars + line).properties(
-        title=f"Charge de la piste vs. Capacité ({jour_choisi.strftime('%d/%m/%Y')})"
-    ).resolve_scale(
-        y='shared'
-    )
-    
+
+    # Combine charts
+    chart = (bars + line).properties(title=title).resolve_scale(y='shared')
     st.altair_chart(chart, use_container_width=True)
-    
+
+    # --- Residual Capacity Chart ---
+    st.subheader("Capacité Résiduelle par heure")
+    residual_chart = alt.Chart(source).mark_bar().encode(
+        x=alt.X('Heure:O', title='Heure', axis=alt.Axis(labelAngle=0)),
+        y=alt.Y(f'{residual_col}:Q', title='Capacité Résiduelle'),
+        color=alt.condition(
+            alt.datum[residual_col] >= 0,
+            alt.value('#2ca02c'),  # Vert pour positif ou nul
+            alt.value('#d62728')   # Rouge pour négatif
+        ),
+        tooltip=['Heure', residual_col]
+    ).properties(
+        title=f"Capacité Résiduelle {analysis_type} ({jour_choisi.strftime('%d/%m/%Y')})"
+    )
+    st.altair_chart(residual_chart, use_container_width=True)
+
+    # --- Display Data Table ---
     st.subheader("Détails par heure")
     st.dataframe(analysis_df)
 
@@ -289,26 +340,30 @@ st.sidebar.title("Navigation")
 page = st.sidebar.radio("Choisissez une page", ["Détection Doublons", "Analyse & Visualisations", "Analyse de Saturation Piste"])
 
 st.sidebar.title("Fichiers de données")
+
+# --- Logique de chargement et de persistance des fichiers ---
 ppr_uploaded_file = st.sidebar.file_uploader("1. Fichier PPR (`Reservations.csv`)", type=['csv'])
+if ppr_uploaded_file is not None:
+    st.session_state.ppr_data = load_and_prepare_data(ppr_uploaded_file, 'PPR')
 
 scr_uploaded_file = None
 if page == "Analyse de Saturation Piste":
     scr_uploaded_file = st.sidebar.file_uploader("2. Fichier SCR (Prévisions Skyguide)", type=['xlsx', 'xls'])
+    if scr_uploaded_file is not None:
+        st.session_state.scr_data = load_and_prepare_data(scr_uploaded_file, 'SCR')
 
+# --- Logique d'affichage des pages ---
 if page in ["Détection Doublons", "Analyse & Visualisations"]:
-    if ppr_uploaded_file:
-        ppr_data = load_and_prepare_data(ppr_uploaded_file, 'PPR')
-        if ppr_data is not None:
-            if page == "Détection Doublons": page_detection_doublons(ppr_data)
-            elif page == "Analyse & Visualisations": page_analyse_visuelle(ppr_data)
+    if st.session_state.ppr_data is not None:
+        if page == "Détection Doublons":
+            page_detection_doublons(st.session_state.ppr_data)
+        elif page == "Analyse & Visualisations":
+            page_analyse_visuelle(st.session_state.ppr_data)
     else:
         st.info("Veuillez charger un fichier PPR via la barre latérale. [Cliquez ici pour récupérer le fichier](https://ppr.gva.ch/Reservations/Index).")
 elif page == "Analyse de Saturation Piste":
-    if ppr_uploaded_file and scr_uploaded_file:
-        ppr_data = load_and_prepare_data(ppr_uploaded_file, 'PPR')
-        scr_data = load_and_prepare_data(scr_uploaded_file, 'SCR')
-        if ppr_data is not None and scr_data is not None:
-            page_saturation_piste(ppr_data, scr_data)
+    if st.session_state.ppr_data is not None and st.session_state.scr_data is not None:
+        page_saturation_piste(st.session_state.ppr_data, st.session_state.scr_data)
     else:
         st.info("Veuillez charger le fichier PPR et le fichier SCR via la barre latérale pour lancer l'analyse de saturation.")
 
