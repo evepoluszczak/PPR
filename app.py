@@ -18,7 +18,7 @@ CAPACITIES_FILE = 'capacities.csv'
 
 @st.cache_data
 def load_and_prepare_data(uploaded_file, file_type):
-    """Charge, lit et normalise les données du fichier CSV (PPR ou SCR)."""
+    """Charge, lit et normalise les données du fichier (PPR en CSV, SCR en XLSX)."""
     try:
         if file_type == 'PPR':
             raw_df = pd.read_csv(uploaded_file, sep=';', encoding='latin-1')
@@ -39,7 +39,7 @@ def load_and_prepare_data(uploaded_file, file_type):
                  raw_df['Type de mouvement'] = raw_df['MovementTypeId'].map(movement_map)
         
         elif file_type == 'SCR':
-            raw_df = pd.read_csv(uploaded_file, encoding='latin-1') # Ce fichier est séparé par des virgules
+            raw_df = pd.read_excel(uploaded_file) # Lire le fichier Excel
             required_cols = ['Date', 'Heure_Local_Tab', 'Rotation']
             if not all(col in raw_df.columns for col in required_cols):
                 st.error(f"Le fichier SCR semble invalide. Colonnes attendues: {', '.join(required_cols)}.")
@@ -246,11 +246,10 @@ def page_saturation_piste(ppr_df, scr_df):
     analysis_df = analysis_df.astype(int)
 
     st.subheader("Graphique de charge de la piste")
-    chart_df = analysis_df[['Vols PPR', 'Vols SCR', 'Capacité Totale']].copy()
-    chart_df.rename(columns={'Capacité Totale': 'Capacité Piste'}, inplace=True)
-    st.bar_chart(chart_df, use_container_width=True)
-    st.write("Les barres représentent le nombre de vols prévus. La ligne représente la capacité totale de la piste.")
-
+    # Utilisation de colonnes pour le graphique pour une meilleure visualisation
+    chart_data = analysis_df[['Vols PPR', 'Vols SCR']].copy()
+    st.bar_chart(chart_data)
+    
     st.subheader("Détails par heure")
     st.dataframe(analysis_df)
 
@@ -263,7 +262,7 @@ ppr_uploaded_file = st.sidebar.file_uploader("1. Fichier PPR (`Reservations.csv`
 
 scr_uploaded_file = None
 if page == "Analyse de Saturation Piste":
-    scr_uploaded_file = st.sidebar.file_uploader("2. Fichier SCR (Prévisions Skyguide)", type=['csv'])
+    scr_uploaded_file = st.sidebar.file_uploader("2. Fichier SCR (Prévisions Skyguide)", type=['xlsx', 'xls'])
 
 if page in ["Détection Doublons", "Analyse & Visualisations"]:
     if ppr_uploaded_file:
