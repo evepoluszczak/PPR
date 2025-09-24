@@ -3,6 +3,7 @@ import pandas as pd
 from datetime import date, timedelta, datetime
 import numpy as np
 import calendar
+import altair as alt
 
 # --- Configuration de la page Streamlit ---
 st.set_page_config(
@@ -246,9 +247,39 @@ def page_saturation_piste(ppr_df, scr_df):
     analysis_df = analysis_df.astype(int)
 
     st.subheader("Graphique de charge de la piste")
-    # Utilisation de colonnes pour le graphique pour une meilleure visualisation
-    chart_data = analysis_df[['Vols PPR', 'Vols SCR']].copy()
-    st.bar_chart(chart_data)
+    
+    # Préparation des données pour le graphique Altair
+    source = analysis_df.reset_index().rename(columns={'index': 'Heure'})
+    source_melted = source.melt(
+        id_vars=['Heure', 'Capacité Totale'],
+        value_vars=['Vols PPR', 'Vols SCR'],
+        var_name='Type de Vol',
+        value_name='Nombre de Vols'
+    )
+
+    # Création du graphique en barres empilées
+    bars = alt.Chart(source_melted).mark_bar().encode(
+        x=alt.X('Heure:O', title='Heure', axis=alt.Axis(labelAngle=0)),
+        y=alt.Y('sum(Nombre de Vols):Q', title='Nombre de Vols'),
+        color=alt.Color('Type de Vol:N', title='Type de Vol', scale=alt.Scale(domain=['Vols PPR', 'Vols SCR'], range=['#1f77b4', '#ff7f0e'])),
+        tooltip=['Heure', 'Type de Vol', 'sum(Nombre de Vols)']
+    )
+
+    # Création de la ligne de capacité
+    line = alt.Chart(source).mark_line(color='red', strokeDash=[5,5], size=3).encode(
+        x=alt.X('Heure:O'),
+        y=alt.Y('Capacité Totale:Q'),
+        tooltip=['Heure', 'Capacité Totale']
+    )
+    
+    # Combinaison des deux graphiques
+    chart = (bars + line).properties(
+        title=f"Charge de la piste vs. Capacité ({jour_choisi.strftime('%d/%m/%Y')})"
+    ).resolve_scale(
+        y='shared'
+    )
+    
+    st.altair_chart(chart, use_container_width=True)
     
     st.subheader("Détails par heure")
     st.dataframe(analysis_df)
