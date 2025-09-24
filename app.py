@@ -13,7 +13,7 @@ st.set_page_config(
 )
 
 # --- Fichiers de données statiques ---
-CAPACITIES_FILE = 'capacities.csv'
+CAPACITIES_FILE = 'capacities.xlsx'
 
 # --- Fonctions de traitement des données (mises en cache pour la performance) ---
 
@@ -211,7 +211,7 @@ def page_saturation_piste(ppr_df, scr_df):
     st.header(f"Analyse pour le {jour_choisi.strftime('%d/%m/%Y')}")
 
     try:
-        capacities_df = pd.read_csv(CAPACITIES_FILE)
+        capacities_df = pd.read_excel(CAPACITIES_FILE)
     except FileNotFoundError:
         st.error(f"Fichier de capacités '{CAPACITIES_FILE}' non trouvé.")
         return
