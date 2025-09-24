@@ -229,5 +229,5 @@ if uploaded_file is not None:
         elif page == "Analyse & Visualisations":
             page_analyse_visuelle(prepared_data)
 else:
-    st.info("Veuillez charger un fichier CSV via la barre latérale pour commencer l'analyse.")
+    st.info("Veuillez charger un fichier CSV via la barre latérale pour commencer l'analyse. [Cliquez ici pour récupérer le fichier](https://ppr.gva.ch/Reservations/Index).")
 
