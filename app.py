@@ -15,18 +15,12 @@ st.set_page_config(
 # --- Initialisation de l'état de session ---
 if 'ppr_data' not in st.session_state:
     st.session_state.ppr_data = None
-if 'scr_data' not in st.session_state:
-    st.session_state.scr_data = None
-# Pour la nouvelle page
-if 'ppr_predicted_data' not in st.session_state:
-    st.session_state.ppr_predicted_data = None
-if 'scr_predicted_data' not in st.session_state:
-    st.session_state.scr_predicted_data = None
-if 'ppr_actual_data' not in st.session_state:
-    st.session_state.ppr_actual_data = None
-if 'scr_actual_data' not in st.session_state:
-    st.session_state.scr_actual_data = None
-
+if 'saturation_data' not in st.session_state:
+    st.session_state.saturation_data = None
+if 'predicted_data' not in st.session_state:
+    st.session_state.predicted_data = None
+if 'actual_data' not in st.session_state:
+    st.session_state.actual_data = None
 
 # --- Fichiers de données statiques ---
 CAPACITIES_FILE = 'capacities.xlsx'
@@ -35,15 +29,14 @@ CAPACITIES_FILE = 'capacities.xlsx'
 
 @st.cache_data
 def load_and_prepare_data(uploaded_file, file_type):
-    """Charge, lit et normalise les données du fichier (PPR en CSV, SCR en XLSX)."""
+    """Charge, lit et normalise les données des différents types de fichiers."""
     try:
-        if file_type == 'PPR' or file_type == 'PPR_PREDICTED' or file_type == 'PPR_ACTUAL':
+        if file_type == 'PPR_DETAIL': # Pour la détection de doublons
             raw_df = pd.read_csv(uploaded_file, sep=';', encoding='latin-1')
             required_cols = ['Id', 'Date', 'CallSign', 'Registration', 'MovementTypeId', 'Deleted']
             if not all(col in raw_df.columns for col in required_cols):
-                st.error(f"Le fichier PPR semble invalide. Colonnes attendues: {', '.join(required_cols)}.")
+                st.error(f"Le fichier PPR détaillé semble invalide.")
                 return None
-
             raw_df = raw_df.rename(columns={'CallSign': 'Call sign', 'Registration': 'Immatriculation'})
             datetime_col = pd.to_datetime(raw_df['Date'], errors='coerce', dayfirst=True)
             raw_df['Slot.Date'] = datetime_col.dt.date
@@ -51,23 +44,24 @@ def load_and_prepare_data(uploaded_file, file_type):
             raw_df['Date / Heure Creation'] = datetime_col
             raw_df['Login (Suppression)'] = None
             raw_df.loc[raw_df['Deleted'] == True, 'Login (Suppression)'] = 'Deleted'
-            if 'MovementTypeId' in raw_df.columns:
-                 movement_map = {True: 'Arrival', False: 'Departure'}
-                 raw_df['Type de mouvement'] = raw_df['MovementTypeId'].map(movement_map)
-        
-        elif file_type == 'SCR' or file_type == 'SCR_PREDICTED' or file_type == 'SCR_ACTUAL':
-            raw_df = pd.read_excel(uploaded_file) # Lire le fichier Excel
-            required_cols = ['Date', 'Heure_Local_Tab', 'Rotation']
+            movement_map = {True: 'Arrival', False: 'Departure'}
+            raw_df['Type de mouvement'] = raw_df['MovementTypeId'].map(movement_map)
+
+        elif file_type == 'COMBINED': # Pour la saturation et l'analyse post-op
+            raw_df = pd.read_excel(uploaded_file)
+            required_cols = ['Date', 'Heure_Local_Tab', 'Rotation', 'Nombre de réservations']
             if not all(col in raw_df.columns for col in required_cols):
-                st.error(f"Le fichier SCR semble invalide. Colonnes attendues: {', '.join(required_cols)}.")
+                st.error(f"Le fichier combiné (PPR+SCR) semble invalide.")
                 return None
-            
             raw_df['Slot.Date'] = pd.to_datetime(raw_df['Date'], errors='coerce').dt.date
             raw_df['Heure'] = raw_df['Heure_Local_Tab'].str.split('h').str[0].astype(int)
+            # Renommer pour clarté
+            raw_df.rename(columns={'Rotation': 'Vols SCR', 'Nombre de réservations': 'Vols PPR'}, inplace=True)
+            raw_df['Vols PPR'] = raw_df['Vols PPR'].fillna(0).astype(int) # Gérer les cas où il n'y a pas de PPR
 
         return raw_df
     except Exception as e:
-        st.error(f"Erreur lors de la lecture ou de la préparation du fichier {file_type}: {e}")
+        st.error(f"Erreur lors de la lecture du fichier {file_type}: {e}")
         return None
 
 @st.cache_data
@@ -215,7 +209,7 @@ def get_season(dt):
     else:
         return "Winter"
 
-def page_saturation_piste(ppr_df, scr_df):
+def page_saturation_piste(combined_df):
     """Affiche la page d'analyse de la saturation de la piste."""
     st.title("🚦 Analyse de Saturation Piste")
     st.markdown("Compare la charge de vols (PPR + SCR) à la capacité théorique de la piste.")
@@ -241,32 +235,21 @@ def page_saturation_piste(ppr_df, scr_df):
         return
     capacity_day_df = capacity_day_df.set_index('Heure')[['Capacité Totale', 'Capacité Arrivées']]
 
-    # --- PPR Counts (Total and Arrivals) ---
-    ppr_df['Slot.Date'] = pd.to_datetime(ppr_df['Slot.Date']).dt.date
-    ppr_jour = ppr_df[ppr_df['Slot.Date'] == jour_choisi].copy()
-    ppr_jour['Heure'] = ppr_jour['Slot.Hour'].apply(lambda t: t.hour)
-    ppr_counts = ppr_jour.groupby('Heure').size().rename('Vols PPR')
-    ppr_arrivals = ppr_jour[ppr_jour['Type de mouvement'] == 'Arrival']
-    ppr_arrival_counts = ppr_arrivals.groupby('Heure').size().rename('Vols PPR Arrivées')
-
-    # --- SCR Counts (Total and Arrivals) ---
-    scr_df['Slot.Date'] = pd.to_datetime(scr_df['Slot.Date']).dt.date
-    scr_jour = scr_df[scr_df['Slot.Date'] == jour_choisi].copy()
-    if not scr_jour.empty:
-        scr_counts = scr_jour.groupby('Heure')['Rotation'].sum().rename('Vols SCR')
-        scr_arrivals = scr_jour[scr_jour['Arrival - Departure'] == 'Arrival']
-        scr_arrival_counts = scr_arrivals.groupby('Heure')['Rotation'].sum().rename('Vols SCR Arrivées')
-    else:
-        scr_counts = pd.Series(name='Vols SCR', dtype=int)
-        scr_arrival_counts = pd.Series(name='Vols SCR Arrivées', dtype=int)
+    # --- Aggregate data from combined file ---
+    df_jour = combined_df[combined_df['Slot.Date'] == jour_choisi].copy()
+    
+    # Total counts
+    total_counts = df_jour.groupby('Heure')[['Vols PPR', 'Vols SCR']].sum()
+    
+    # Arrival counts
+    df_jour_arrivals = df_jour[df_jour['Arrival - Departure'] == 'Arrival']
+    arrival_counts = df_jour_arrivals.groupby('Heure')[['Vols PPR', 'Vols SCR']].sum().rename(columns={'Vols PPR': 'Vols PPR Arrivées', 'Vols SCR': 'Vols SCR Arrivées'})
 
     # --- Combine DataFrames ---
     analysis_df = pd.DataFrame(index=range(24))
     analysis_df = analysis_df.join(capacity_day_df)
-    analysis_df = analysis_df.join(ppr_counts)
-    analysis_df = analysis_df.join(ppr_arrival_counts)
-    analysis_df = analysis_df.join(scr_counts)
-    analysis_df = analysis_df.join(scr_arrival_counts)
+    analysis_df = analysis_df.join(total_counts)
+    analysis_df = analysis_df.join(arrival_counts)
     analysis_df.fillna(0, inplace=True)
 
     # --- Calculate Totals and Residuals ---
@@ -276,100 +259,105 @@ def page_saturation_piste(ppr_df, scr_df):
     analysis_df['Capacité Résiduelle Arrivées'] = analysis_df['Capacité Arrivées'] - analysis_df['Total Vols Arrivées']
     analysis_df = analysis_df.astype(int)
 
-    # --- Sélecteur d'analyse ---
-    analysis_type = st.radio(
-        "Choisissez le type d'analyse à visualiser",
-        ("Totale", "Arrivées"),
-        horizontal=True
-    )
+    # --- Display UI ---
+    analysis_type = st.radio("Choisissez le type d'analyse", ("Totale", "Arrivées"), horizontal=True)
     
     st.subheader(f"Graphique de charge de la piste ({analysis_type})")
-
-    # Data preparation based on selection
     if analysis_type == "Totale":
-        value_vars = ['Vols PPR', 'Vols SCR']
-        capacity_col = 'Capacité Totale'
-        title = f"Charge Totale vs. Capacité ({jour_choisi.strftime('%d/%m/%Y')})"
-        residual_col = 'Capacité Résiduelle Totale'
-    else: # Arrivées
-        value_vars = ['Vols PPR Arrivées', 'Vols SCR Arrivées']
-        capacity_col = 'Capacité Arrivées'
-        title = f"Charge Arrivées vs. Capacité ({jour_choisi.strftime('%d/%m/%Y')})"
-        residual_col = 'Capacité Résiduelle Arrivées'
+        value_vars, capacity_col, residual_col = ['Vols PPR', 'Vols SCR'], 'Capacité Totale', 'Capacité Résiduelle Totale'
+    else:
+        value_vars, capacity_col, residual_col = ['Vols PPR Arrivées', 'Vols SCR Arrivées'], 'Capacité Arrivées', 'Capacité Résiduelle Arrivées'
 
-    # Melted data for stacked bar chart
     source = analysis_df.reset_index().rename(columns={'index': 'Heure'})
-    source_melted = source.melt(
-        id_vars=['Heure', capacity_col],
-        value_vars=value_vars,
-        var_name='Type de Vol',
-        value_name='Nombre de Vols'
-    )
+    source_melted = source.melt(id_vars=['Heure', capacity_col], value_vars=value_vars, var_name='Type de Vol', value_name='Nombre de Vols')
+    bars = alt.Chart(source_melted).mark_bar().encode(x=alt.X('Heure:O', title='Heure'), y=alt.Y('sum(Nombre de Vols):Q', title='Nombre de Vols'), color=alt.Color('Type de Vol:N'), tooltip=['Heure', 'Type de Vol', 'sum(Nombre de Vols)'])
+    line = alt.Chart(source).mark_line(color='red', strokeDash=[5,5]).encode(x='Heure:O', y=f'{capacity_col}:Q', tooltip=['Heure', capacity_col])
+    st.altair_chart((bars + line).properties(title=f"Charge {analysis_type} vs. Capacité").resolve_scale(y='shared'), use_container_width=True)
 
-    # Stacked bar chart
-    bars = alt.Chart(source_melted).mark_bar().encode(
-        x=alt.X('Heure:O', title='Heure', axis=alt.Axis(labelAngle=0)),
-        y=alt.Y('sum(Nombre de Vols):Q', title='Nombre de Vols'),
-        color=alt.Color('Type de Vol:N', title='Type de Vol'),
-        tooltip=['Heure', 'Type de Vol', 'sum(Nombre de Vols)']
-    )
-
-    # Capacity line
-    line = alt.Chart(source).mark_line(color='red', strokeDash=[5,5], size=3).encode(
-        x=alt.X('Heure:O'),
-        y=alt.Y(f'{capacity_col}:Q', title=capacity_col),
-        tooltip=['Heure', f'{capacity_col}']
-    )
-
-    # Combine charts
-    chart = (bars + line).properties(title=title).resolve_scale(y='shared')
-    st.altair_chart(chart, use_container_width=True)
-
-    # --- Residual Capacity Chart ---
     st.subheader("Capacité Résiduelle par heure")
-    residual_chart = alt.Chart(source).mark_bar().encode(
-        x=alt.X('Heure:O', title='Heure', axis=alt.Axis(labelAngle=0)),
-        y=alt.Y(f'{residual_col}:Q', title='Capacité Résiduelle'),
-        color=alt.condition(
-            alt.datum[residual_col] >= 0,
-            alt.value('#2ca02c'),  # Vert pour positif ou nul
-            alt.value('#d62728')   # Rouge pour négatif
-        ),
-        tooltip=['Heure', residual_col]
-    ).properties(
-        title=f"Capacité Résiduelle {analysis_type} ({jour_choisi.strftime('%d/%m/%Y')})"
-    )
+    residual_chart = alt.Chart(source).mark_bar().encode(x=alt.X('Heure:O', title='Heure'), y=alt.Y(f'{residual_col}:Q', title='Capacité Résiduelle'), color=alt.condition(alt.datum[residual_col] >= 0, alt.value('green'), alt.value('red')), tooltip=['Heure', residual_col]).properties(title=f"Capacité Résiduelle {analysis_type}")
     st.altair_chart(residual_chart, use_container_width=True)
 
-    # --- Display Data Table ---
     st.subheader("Détails par heure")
     st.dataframe(analysis_df)
+
+def calculate_hourly_counts(df, analysis_day):
+    """Helper function to calculate hourly flight counts from a combined dataframe."""
+    df_jour = df[df['Slot.Date'] == analysis_day].copy()
+    total_counts = df_jour.groupby('Heure')[['Vols PPR', 'Vols SCR']].sum()
+    df_jour_arrivals = df_jour[df_jour['Arrival - Departure'] == 'Arrival']
+    arrival_counts = df_jour_arrivals.groupby('Heure')[['Vols PPR', 'Vols SCR']].sum().rename(columns={'Vols PPR': 'Vols PPR Arrivées', 'Vols SCR': 'Vols SCR Arrivées'})
+    
+    summary_df = pd.DataFrame(index=range(24))
+    summary_df = summary_df.join(total_counts)
+    summary_df = summary_df.join(arrival_counts)
+    summary_df.fillna(0, inplace=True)
+    summary_df['Total Vols'] = summary_df['Vols PPR'] + summary_df['Vols SCR']
+    summary_df['Total Vols Arrivées'] = summary_df['Vols PPR Arrivées'] + summary_df['Vols SCR Arrivées']
+    return summary_df.astype(int)
+
 
 def page_post_operationnelle():
     """Affiche la page d'analyse comparative Prévu vs. Réel."""
     st.title("🔎 Analyse Post-Opérationnelle")
-    st.markdown("Comparez la saturation de piste prévue la veille avec la réalité de la journée passée.")
+    st.markdown("Comparez la saturation de piste prévue avec la réalité de la journée passée.")
 
-    # Sélecteur de date pour l'analyse
     jour_analyse = st.date_input("Choisissez la journée à analyser", date.today() - timedelta(days=1))
     
     st.subheader(f"Fichiers pour l'analyse du {jour_analyse.strftime('%d/%m/%Y')}")
     
     col1, col2 = st.columns(2)
     with col1:
-        st.markdown("#### Fichiers de Prévision (J-1)")
-        ppr_predicted_file = st.file_uploader("1. Fichier PPR de la veille", type=['csv'], key="ppr_pred")
-        scr_predicted_file = st.file_uploader("2. Fichier SCR de la veille", type=['xlsx', 'xls'], key="scr_pred")
-
+        st.markdown("#### Fichier de Prévision")
+        predicted_file = st.file_uploader("1. Charger le fichier Prévu (PPR+SCR)", type=['xlsx', 'xls'], key="predicted")
     with col2:
-        st.markdown("#### Fichiers Réels (J0)")
-        ppr_actual_file = st.file_uploader("3. Fichier PPR réel", type=['csv'], key="ppr_act")
-        scr_actual_file = st.file_uploader("4. Fichier SCR réel", type=['xlsx', 'xls'], key="scr_act")
-    
-    if st.button("Lancer la comparaison"):
-        # Logique de traitement et d'affichage à implémenter ici
-        st.info("La logique d'analyse sera implémentée une fois la structure des fichiers 'réels' confirmée.")
-        st.warning("Pour finaliser cette page, veuillez fournir un exemple des fichiers de vols PPR et SCR réellement effectués.")
+        st.markdown("#### Fichier Réalisé")
+        actual_file = st.file_uploader("2. Charger le fichier Réalisé (PPR+SCR)", type=['xlsx', 'xls'], key="actual")
+
+    if predicted_file:
+        st.session_state.predicted_data = load_and_prepare_data(predicted_file, 'COMBINED')
+    if actual_file:
+        st.session_state.actual_data = load_and_prepare_data(actual_file, 'COMBINED')
+
+    if st.session_state.predicted_data is not None and st.session_state.actual_data is not None:
+        predicted_counts = calculate_hourly_counts(st.session_state.predicted_data, jour_analyse)
+        actual_counts = calculate_hourly_counts(st.session_state.actual_data, jour_analyse)
+
+        # Merge and calculate deltas
+        comparison_df = predicted_counts.join(actual_counts, lsuffix='_Prévu', rsuffix='_Réalisé')
+        comparison_df['Delta PPR'] = comparison_df['Vols PPR_Réalisé'] - comparison_df['Vols PPR_Prévu']
+        comparison_df['Delta SCR'] = comparison_df['Vols SCR_Réalisé'] - comparison_df['Vols SCR_Prévu']
+        comparison_df['Delta Total'] = comparison_df['Total Vols_Réalisé'] - comparison_df['Total Vols_Prévu']
+        
+        st.subheader("Tableau Comparatif Prévu vs. Réalisé")
+        st.dataframe(comparison_df)
+
+        # --- Visualisation ---
+        analysis_type = st.radio("Choisissez le type d'analyse à visualiser", ("Totale", "Arrivées"), horizontal=True, key="post_op_radio")
+
+        if analysis_type == 'Totale':
+            melt_vars = ['Total Vols_Prévu', 'Total Vols_Réalisé']
+            title = "Comparaison des Vols Totaux (Prévu vs. Réalisé)"
+        else:
+            melt_vars = ['Total Vols Arrivées_Prévu', 'Total Vols Arrivées_Réalisé']
+            title = "Comparaison des Arrivées (Prévu vs. Réalisé)"
+
+        plot_df = comparison_df[melt_vars].reset_index().rename(columns={'index': 'Heure'})
+        plot_df = plot_df.melt(id_vars='Heure', var_name='Catégorie', value_name='Nombre de Vols')
+        plot_df['Catégorie'] = plot_df['Catégorie'].str.replace('Total Vols_', '').str.replace('Arrivées_', '')
+
+        chart = alt.Chart(plot_df).mark_bar(opacity=0.8).encode(
+            x=alt.X('Heure:O', title='Heure'),
+            y=alt.Y('Nombre de Vols:Q', title='Nombre de Vols'),
+            xOffset='Catégorie:N',
+            color='Catégorie:N',
+            tooltip=['Heure', 'Catégorie', 'Nombre de Vols']
+        ).properties(
+            title=title
+        ).configure_axis(
+            labelAngle=0
+        )
+        st.altair_chart(chart, use_container_width=True)
 
 
 # --- Interface principale de l'application ---
@@ -378,32 +366,28 @@ page = st.sidebar.radio("Choisissez une page", ["Détection Doublons", "Analyse 
 
 st.sidebar.title("Fichiers de données")
 
-# --- Logique de chargement et de persistance des fichiers ---
-if page in ["Détection Doublons", "Analyse & Visualisations", "Analyse de Saturation Piste"]:
-    ppr_uploaded_file = st.sidebar.file_uploader("1. Fichier PPR (`Reservations.csv`)", type=['csv'])
-    if ppr_uploaded_file is not None:
-        st.session_state.ppr_data = load_and_prepare_data(ppr_uploaded_file, 'PPR')
-
-    scr_uploaded_file = None
-    if page == "Analyse de Saturation Piste":
-        scr_uploaded_file = st.sidebar.file_uploader("2. Fichier SCR (Prévisions Skyguide)", type=['xlsx', 'xls'])
-        if scr_uploaded_file is not None:
-            st.session_state.scr_data = load_and_prepare_data(scr_uploaded_file, 'SCR')
-
-# --- Logique d'affichage des pages ---
+# --- Logique de chargement et d'affichage des pages ---
 if page in ["Détection Doublons", "Analyse & Visualisations"]:
+    ppr_uploaded_file = st.sidebar.file_uploader("Fichier PPR Détaillé (`Reservations.csv`)", type=['csv'])
+    if ppr_uploaded_file is not None:
+        st.session_state.ppr_data = load_and_prepare_data(ppr_uploaded_file, 'PPR_DETAIL')
+    
     if st.session_state.ppr_data is not None:
-        if page == "Détection Doublons":
-            page_detection_doublons(st.session_state.ppr_data)
-        elif page == "Analyse & Visualisations":
-            page_analyse_visuelle(st.session_state.ppr_data)
+        if page == "Détection Doublons": page_detection_doublons(st.session_state.ppr_data)
+        elif page == "Analyse & Visualisations": page_analyse_visuelle(st.session_state.ppr_data)
     else:
-        st.info("Veuillez charger un fichier PPR via la barre latérale. [Cliquez ici pour récupérer le fichier](https://ppr.gva.ch/Reservations/Index).")
+        st.info("Veuillez charger un fichier PPR détaillé. [Lien pour récupérer le fichier](https://ppr.gva.ch/Reservations/Index).")
+
 elif page == "Analyse de Saturation Piste":
-    if st.session_state.ppr_data is not None and st.session_state.scr_data is not None:
-        page_saturation_piste(st.session_state.ppr_data, st.session_state.scr_data)
+    saturation_file = st.sidebar.file_uploader("Fichier Prévisions (PPR+SCR)", type=['xlsx', 'xls'])
+    if saturation_file is not None:
+        st.session_state.saturation_data = load_and_prepare_data(saturation_file, 'COMBINED')
+    
+    if st.session_state.saturation_data is not None:
+        page_saturation_piste(st.session_state.saturation_data)
     else:
-        st.info("Veuillez charger le fichier PPR et le fichier SCR via la barre latérale pour lancer l'analyse de saturation.")
+        st.info("Veuillez charger le fichier de prévisions combiné (PPR+SCR).")
+
 elif page == "Analyse Post-Opérationnelle":
     page_post_operationnelle()
 
