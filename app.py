@@ -17,6 +17,16 @@ if 'ppr_data' not in st.session_state:
     st.session_state.ppr_data = None
 if 'scr_data' not in st.session_state:
     st.session_state.scr_data = None
+# Pour la nouvelle page
+if 'ppr_predicted_data' not in st.session_state:
+    st.session_state.ppr_predicted_data = None
+if 'scr_predicted_data' not in st.session_state:
+    st.session_state.scr_predicted_data = None
+if 'ppr_actual_data' not in st.session_state:
+    st.session_state.ppr_actual_data = None
+if 'scr_actual_data' not in st.session_state:
+    st.session_state.scr_actual_data = None
+
 
 # --- Fichiers de données statiques ---
 CAPACITIES_FILE = 'capacities.xlsx'
@@ -27,7 +37,7 @@ CAPACITIES_FILE = 'capacities.xlsx'
 def load_and_prepare_data(uploaded_file, file_type):
     """Charge, lit et normalise les données du fichier (PPR en CSV, SCR en XLSX)."""
     try:
-        if file_type == 'PPR':
+        if file_type == 'PPR' or file_type == 'PPR_PREDICTED' or file_type == 'PPR_ACTUAL':
             raw_df = pd.read_csv(uploaded_file, sep=';', encoding='latin-1')
             required_cols = ['Id', 'Date', 'CallSign', 'Registration', 'MovementTypeId', 'Deleted']
             if not all(col in raw_df.columns for col in required_cols):
@@ -45,7 +55,7 @@ def load_and_prepare_data(uploaded_file, file_type):
                  movement_map = {True: 'Arrival', False: 'Departure'}
                  raw_df['Type de mouvement'] = raw_df['MovementTypeId'].map(movement_map)
         
-        elif file_type == 'SCR':
+        elif file_type == 'SCR' or file_type == 'SCR_PREDICTED' or file_type == 'SCR_ACTUAL':
             raw_df = pd.read_excel(uploaded_file) # Lire le fichier Excel
             required_cols = ['Date', 'Heure_Local_Tab', 'Rotation']
             if not all(col in raw_df.columns for col in required_cols):
@@ -335,22 +345,50 @@ def page_saturation_piste(ppr_df, scr_df):
     st.subheader("Détails par heure")
     st.dataframe(analysis_df)
 
+def page_post_operationnelle():
+    """Affiche la page d'analyse comparative Prévu vs. Réel."""
+    st.title("🔎 Analyse Post-Opérationnelle")
+    st.markdown("Comparez la saturation de piste prévue la veille avec la réalité de la journée passée.")
+
+    # Sélecteur de date pour l'analyse
+    jour_analyse = st.date_input("Choisissez la journée à analyser", date.today() - timedelta(days=1))
+    
+    st.subheader(f"Fichiers pour l'analyse du {jour_analyse.strftime('%d/%m/%Y')}")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("#### Fichiers de Prévision (J-1)")
+        ppr_predicted_file = st.file_uploader("1. Fichier PPR de la veille", type=['csv'], key="ppr_pred")
+        scr_predicted_file = st.file_uploader("2. Fichier SCR de la veille", type=['xlsx', 'xls'], key="scr_pred")
+
+    with col2:
+        st.markdown("#### Fichiers Réels (J0)")
+        ppr_actual_file = st.file_uploader("3. Fichier PPR réel", type=['csv'], key="ppr_act")
+        scr_actual_file = st.file_uploader("4. Fichier SCR réel", type=['xlsx', 'xls'], key="scr_act")
+    
+    if st.button("Lancer la comparaison"):
+        # Logique de traitement et d'affichage à implémenter ici
+        st.info("La logique d'analyse sera implémentée une fois la structure des fichiers 'réels' confirmée.")
+        st.warning("Pour finaliser cette page, veuillez fournir un exemple des fichiers de vols PPR et SCR réellement effectués.")
+
+
 # --- Interface principale de l'application ---
 st.sidebar.title("Navigation")
-page = st.sidebar.radio("Choisissez une page", ["Détection Doublons", "Analyse & Visualisations", "Analyse de Saturation Piste"])
+page = st.sidebar.radio("Choisissez une page", ["Détection Doublons", "Analyse & Visualisations", "Analyse de Saturation Piste", "Analyse Post-Opérationnelle"])
 
 st.sidebar.title("Fichiers de données")
 
 # --- Logique de chargement et de persistance des fichiers ---
-ppr_uploaded_file = st.sidebar.file_uploader("1. Fichier PPR (`Reservations.csv`)", type=['csv'])
-if ppr_uploaded_file is not None:
-    st.session_state.ppr_data = load_and_prepare_data(ppr_uploaded_file, 'PPR')
+if page in ["Détection Doublons", "Analyse & Visualisations", "Analyse de Saturation Piste"]:
+    ppr_uploaded_file = st.sidebar.file_uploader("1. Fichier PPR (`Reservations.csv`)", type=['csv'])
+    if ppr_uploaded_file is not None:
+        st.session_state.ppr_data = load_and_prepare_data(ppr_uploaded_file, 'PPR')
 
-scr_uploaded_file = None
-if page == "Analyse de Saturation Piste":
-    scr_uploaded_file = st.sidebar.file_uploader("2. Fichier SCR (Prévisions Skyguide)", type=['xlsx', 'xls'])
-    if scr_uploaded_file is not None:
-        st.session_state.scr_data = load_and_prepare_data(scr_uploaded_file, 'SCR')
+    scr_uploaded_file = None
+    if page == "Analyse de Saturation Piste":
+        scr_uploaded_file = st.sidebar.file_uploader("2. Fichier SCR (Prévisions Skyguide)", type=['xlsx', 'xls'])
+        if scr_uploaded_file is not None:
+            st.session_state.scr_data = load_and_prepare_data(scr_uploaded_file, 'SCR')
 
 # --- Logique d'affichage des pages ---
 if page in ["Détection Doublons", "Analyse & Visualisations"]:
@@ -366,4 +404,6 @@ elif page == "Analyse de Saturation Piste":
         page_saturation_piste(st.session_state.ppr_data, st.session_state.scr_data)
     else:
         st.info("Veuillez charger le fichier PPR et le fichier SCR via la barre latérale pour lancer l'analyse de saturation.")
+elif page == "Analyse Post-Opérationnelle":
+    page_post_operationnelle()
 
