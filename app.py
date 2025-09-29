@@ -319,6 +319,7 @@ def page_saturation_piste(combined_df):
 
     # --- Combine DataFrames ---
     analysis_df = pd.DataFrame(index=range(24))
+    analysis_df.index.name = 'Heure'
     analysis_df = analysis_df.join(capacity_day_df)
     analysis_df = analysis_df.join(total_counts)
     analysis_df = analysis_df.join(arrival_counts)
@@ -363,13 +364,20 @@ def calculate_hourly_counts(df, analysis_day):
     """Helper function to calculate hourly flight counts from a combined dataframe."""
     df_jour = df[df['Slot.Date'] == analysis_day].copy()
     total_counts = df_jour.groupby('Heure')[['Vols PPR', 'Vols SCR']].sum()
-    df_jour_arrivals = df_jour[df_jour['Arrival - Departure'] == 'Arrival']
-    arrival_counts = df_jour_arrivals.groupby('Heure')[['Vols PPR', 'Vols SCR']].sum().rename(columns={'Vols PPR': 'Vols PPR Arrivées', 'Vols SCR': 'Vols SCR Arrivées'})
     
+    # LOGIQUE CORRIGÉE
+    df_jour_arrivals = df_jour[df_jour['Arrival - Departure'] == 'Arrival']
+    if not df_jour_arrivals.empty:
+        arrival_counts = df_jour_arrivals.groupby('Heure')[['Vols PPR', 'Vols SCR']].sum().rename(columns={'Vols PPR': 'Vols PPR Arrivées', 'Vols SCR': 'Vols SCR Arrivées'})
+    else:
+        arrival_counts = pd.DataFrame(columns=['Vols PPR Arrivées', 'Vols SCR Arrivées'])
+
     summary_df = pd.DataFrame(index=range(24))
+    summary_df.index.name = 'Heure'
     summary_df = summary_df.join(total_counts)
     summary_df = summary_df.join(arrival_counts)
     summary_df.fillna(0, inplace=True)
+
     summary_df['Total Vols'] = summary_df['Vols PPR'] + summary_df['Vols SCR']
     summary_df['Total Vols Arrivées'] = summary_df['Vols PPR Arrivées'] + summary_df['Vols SCR Arrivées']
     return summary_df.astype(int)
@@ -445,26 +453,16 @@ page = st.sidebar.radio("Choisissez une page", ["Détection Doublons", "Analyse 
 st.sidebar.title("Fichiers de données")
 
 # --- Logique de chargement et d'affichage des pages ---
-if page == "Détection Doublons":
+if page in ["Détection Doublons", "Analyse & Visualisations"]:
     ppr_uploaded_file = st.sidebar.file_uploader("Fichier PPR Détaillé (`Reservations.csv`)", type=['csv'])
     if ppr_uploaded_file is not None:
         st.session_state.ppr_data = load_and_prepare_data(ppr_uploaded_file, 'PPR_DETAIL')
     
     if st.session_state.ppr_data is not None:
-        page_detection_doublons(st.session_state.ppr_data)
+        if page == "Détection Doublons": page_detection_doublons(st.session_state.ppr_data)
+        elif page == "Analyse & Visualisations": page_analyse_visuelle(st.session_state.ppr_data)
     else:
         st.info("Veuillez charger un fichier PPR détaillé. [Lien pour récupérer le fichier](https://ppr.gva.ch/Reservations/Index).")
-
-elif page == "Analyse & Visualisations":
-    vis_uploaded_file = st.sidebar.file_uploader("Fichier PPR Riche (`PBI_PPR_EPL.xlsx`)", type=['xlsx', 'xls'], key="ppr_rich_vis")
-    if vis_uploaded_file is not None:
-        st.session_state.vis_data = load_and_prepare_data(vis_uploaded_file, 'PPR_RICH')
-    
-    if st.session_state.vis_data is not None:
-        page_analyse_visuelle(st.session_state.vis_data)
-    else:
-        st.info("Veuillez charger un fichier PPR riche (format PBI_PPR_EPL) pour les visualisations.")
-
 
 elif page == "Analyse de Saturation Piste":
     saturation_file = st.sidebar.file_uploader("Fichier Prévisions (PPR+SCR)", type=['xlsx', 'xls'])
