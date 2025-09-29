@@ -46,15 +46,9 @@ def load_and_prepare_data(uploaded_file, file_type):
             raw_df.loc[raw_df['Deleted'] == True, 'Login (Suppression)'] = 'Deleted'
             movement_map = {True: 'Arrival', False: 'Departure'}
             raw_df['Type de mouvement'] = raw_df['MovementTypeId'].map(movement_map)
-            return raw_df
 
         elif file_type == 'COMBINED': # Pour la saturation et l'analyse post-op
             raw_df = pd.read_excel(uploaded_file)
-            # Adapter aux nouveaux noms de colonnes du fichier de prévision
-            if 'Arrival - Departure Code' in raw_df.columns:
-                 raw_df.rename(columns={'Arrival - Departure Code': 'Arrival - Departure'}, inplace=True)
-                 raw_df['Arrival - Departure'] = raw_df['Arrival - Departure'].map({'A': 'Arrival', 'D': 'Departure'})
-
             required_cols = ['Date', 'Heure_Local_Tab', 'Rotation', 'Nombre de réservations']
             if not all(col in raw_df.columns for col in required_cols):
                 st.error(f"Le fichier combiné (PPR+SCR) semble invalide.")
@@ -64,15 +58,15 @@ def load_and_prepare_data(uploaded_file, file_type):
             # Renommer pour clarté
             raw_df.rename(columns={'Rotation': 'Vols SCR', 'Nombre de réservations': 'Vols PPR'}, inplace=True)
             raw_df['Vols PPR'] = raw_df['Vols PPR'].fillna(0).astype(int) # Gérer les cas où il n'y a pas de PPR
-            return raw_df
-            
+
+        return raw_df
     except Exception as e:
         st.error(f"Erreur lors de la lecture du fichier {file_type}: {e}")
         return None
 
 @st.cache_data
-def process_ppr_data(df, analysis_dates):
-    """Applique la logique de détection de doublons pour des dates spécifiques."""
+def process_ppr_data(df):
+    """Applique la logique de détection de doublons."""
     try:
         df_copy = df.copy()
         df_copy['Slot.Date'] = pd.to_datetime(df_copy['Slot.Date'], errors='coerce').dt.date
@@ -83,10 +77,9 @@ def process_ppr_data(df, analysis_dates):
         duplicates = active_ppr[active_ppr['Nb de lignes'] > 1].copy()
         if 'Call sign' in duplicates.columns:
             duplicates = duplicates[duplicates['Call sign'] != 'RWYCHK']
-        
-        # Utiliser les dates fournies pour l'analyse
-        duplicates = duplicates[duplicates['Slot.Date'].isin(analysis_dates)]
-
+        today = date.today()
+        tomorrow = today + timedelta(days=1)
+        duplicates = duplicates[duplicates['Slot.Date'].isin([today, tomorrow])]
         if duplicates.empty: return pd.DataFrame()
         duplicates.sort_values(by=group_cols + ['Slot.Hour'], inplace=True)
         duplicates['Next_Slot.Hour'] = duplicates.groupby(group_cols)['Slot.Hour'].shift(-1)
@@ -107,48 +100,22 @@ def process_ppr_data(df, analysis_dates):
 def page_detection_doublons(df):
     """Affiche la page de détection des doublons."""
     st.title("✈️ Outil de détection et de suivi des PPR")
-
+    st.markdown("Analyse des doublons et liste des vols pour **aujourd'hui** et **demain**.")
+    st.header("📊 Tableau de bord")
+    today = date.today()
+    tomorrow = today + timedelta(days=1)
     active_ppr_full = df[df['Login (Suppression)'].isnull()].copy()
     active_ppr_full['Slot.Date'] = pd.to_datetime(active_ppr_full['Slot.Date']).dt.date
-    
-    # Rendre les dates d'analyse dynamiques
-    available_dates = sorted(active_ppr_full['Slot.Date'].unique())
-    
-    if len(available_dates) == 0:
-        st.warning("Aucun vol actif trouvé dans le fichier chargé.")
-        return
-
-    analysis_dates = available_dates[:2] # Analyser les deux premiers jours trouvés
-    
-    # Mettre à jour le sous-titre dynamiquement
-    if len(analysis_dates) == 2:
-        date1_str = analysis_dates[0].strftime('%d/%m/%Y')
-        date2_str = analysis_dates[1].strftime('%d/%m/%Y')
-        st.markdown(f"Analyse des doublons et liste des vols pour le **{date1_str}** et le **{date2_str}**.")
-    else:
-        date1_str = analysis_dates[0].strftime('%d/%m/%Y')
-        st.markdown(f"Analyse des doublons et liste des vols pour le **{date1_str}**.")
-
-    st.header("📊 Tableau de bord")
-    
-    ppr_day1_count = active_ppr_full[active_ppr_full['Slot.Date'] == analysis_dates[0]].shape[0]
-    ppr_day2_count = 0
-    if len(analysis_dates) > 1:
-        ppr_day2_count = active_ppr_full[active_ppr_full['Slot.Date'] == analysis_dates[1]].shape[0]
-
-    result_df = process_ppr_data(df, analysis_dates)
+    ppr_today_count = active_ppr_full[active_ppr_full['Slot.Date'] == today].shape[0]
+    ppr_tomorrow_count = active_ppr_full[active_ppr_full['Slot.Date'] == tomorrow].shape[0]
+    result_df = process_ppr_data(df)
     num_anomalies = 0
     if not result_df.empty:
         num_anomalies = result_df[result_df['Check'] != ''].shape[0]
-        
     col1, col2, col3 = st.columns(3)
-    col1.metric(f"PPR prévus le {analysis_dates[0].strftime('%d/%m')}", ppr_day1_count)
-    if len(analysis_dates) > 1:
-        col2.metric(f"PPR prévus le {analysis_dates[1].strftime('%d/%m')}", ppr_day2_count)
-    else:
-        col2.metric("PPR prévus J+1", 0) # Placeholder
+    col1.metric("PPR prévus aujourd'hui", ppr_today_count)
+    col2.metric("PPR prévus demain", ppr_tomorrow_count)
     col3.metric("Anomalies détectées", num_anomalies, help="Nombre de paires de vols problématiques.")
-    
     st.header("🚨 Analyse des Doublons")
     summary_df = pd.DataFrame()
     if num_anomalies > 0:
@@ -176,18 +143,8 @@ def page_detection_doublons(df):
                         user_anomalies = summary_df[summary_df['OwnerProfileLogin'] == login]
                         mail_body_lines = ["Bonjour,", "\nNos systèmes ont détecté des anomalies dans vos réservations PPR. Pourriez-vous les corriger ?\n"]
                         for index, row in user_anomalies.iterrows():
-                            # Traduction du type de mouvement
-                            movement_translation = {'Arrival': 'Arrivée', 'Departure': 'Départ'}
-                            translated_movement = movement_translation.get(row['Type de mouvement'], row['Type de mouvement'])
-                            
-                            # Motif de l'anomalie
-                            reason = "Horaires identiques" if row['Check'] == 'Erreur' else f"Deux '{translated_movement}' consécutifs"
-                            
-                            # Formatage de la date
-                            flight_date = row['Slot.Date'].strftime('%d/%m/%Y')
-                            
-                            # Ligne de texte pour l'e-mail
-                            line = f"- Vol du {flight_date}, Immat: {row['Immatriculation']}, CallSign: {row.get('Call sign', 'N/A')}, Slots: {row['Slot.Hour']} & {row['Next_Slot.Hour']} -> Motif: {reason}"
+                            reason = "Horaires identiques" if row['Check'] == 'Erreur' else f"Deux '{row['Type de mouvement']}' consécutifs"
+                            line = f"- Immat: {row['Immatriculation']}, CallSign: {row.get('Call sign', 'N/A')}, Slots: {row['Slot.Hour']} & {row['Next_Slot.Hour']} -> Motif: {reason}"
                             mail_body_lines.append(line)
                         mail_body_lines.extend(["\nMerci de votre collaboration.", "Cordialement,"])
                         full_mail_text = "\n".join(mail_body_lines)
@@ -197,13 +154,13 @@ def page_detection_doublons(df):
         else:
             st.info("Aucune anomalie à signaler.")
     st.header("📋 Liste des PPR Actifs")
-    active_ppr_filtered_days = active_ppr_full[active_ppr_full['Slot.Date'].isin(analysis_dates)].copy()
-    active_ppr_filtered_days.sort_values(by=['Slot.Date', 'Immatriculation', 'Slot.Hour'], inplace=True)
+    active_ppr_j0_j1 = active_ppr_full[active_ppr_full['Slot.Date'].isin([today, tomorrow])].copy()
+    active_ppr_j0_j1.sort_values(by=['Slot.Date', 'Immatriculation', 'Slot.Hour'], inplace=True)
     with st.expander("Afficher/Masquer la liste complète", expanded=False):
         filter_text = st.text_input("Filtrer la liste :", placeholder="Ex: HBLVK, T7-SCT, SFS...")
         display_cols = ['Slot.Date', 'Immatriculation', 'Call sign', 'Slot.Hour', 'Type de mouvement', 'HandlingAgentName', 'OwnerProfileLogin']
-        display_cols_exist = [col for col in display_cols if col in active_ppr_filtered_days.columns]
-        filtered_list = active_ppr_filtered_days
+        display_cols_exist = [col for col in display_cols if col in active_ppr_j0_j1.columns]
+        filtered_list = active_ppr_j0_j1
         if filter_text:
             mask = np.column_stack([filtered_list[col].astype(str).str.contains(filter_text, case=False, na=False) for col in display_cols_exist])
             filtered_list = filtered_list[mask.any(axis=1)]
@@ -212,29 +169,15 @@ def page_detection_doublons(df):
 def page_analyse_visuelle(df):
     """Affiche la page d'analyse PPR avec des graphiques."""
     st.title("📊 Analyse & Visualisations des PPR")
-    
+    today = date.today()
+    tomorrow = today + timedelta(days=1)
     active_ppr = df[df['Login (Suppression)'].isnull()].copy()
     active_ppr['Slot.Date'] = pd.to_datetime(active_ppr['Slot.Date']).dt.date
-    
-    # Rendre le choix de la date dynamique
-    available_dates = sorted(active_ppr['Slot.Date'].unique())
-    
-    if not available_dates:
-        st.warning("Aucun vol actif trouvé dans le fichier chargé pour la visualisation.")
-        return
-
-    # Formatter les dates pour l'affichage dans le selectbox
-    date_options = [d.strftime('%d/%m/%Y') for d in available_dates]
-    selected_date_str = st.selectbox("Choisissez une journée à analyser", date_options)
-    
-    # Convertir la chaîne de caractères sélectionnée en objet date
-    jour_choisi = datetime.strptime(selected_date_str, '%d/%m/%Y').date()
-
+    jour_choisi_str = st.selectbox("Choisissez une journée à analyser", ("Aujourd'hui", "Demain"))
     show_rwy_check = st.checkbox("Mettre en évidence les RWYCHK")
-    
+    jour_choisi = today if jour_choisi_str == "Aujourd'hui" else tomorrow
     st.header(f"Nombre de vols par heure pour le {jour_choisi.strftime('%d/%m/%Y')}")
     df_jour = active_ppr[active_ppr['Slot.Date'] == jour_choisi].copy()
-    
     if df_jour.empty:
         st.warning(f"Aucun vol PPR prévu pour le {jour_choisi.strftime('%d/%m/%Y')}.")
     else:
@@ -268,23 +211,9 @@ def page_saturation_piste(combined_df):
     st.title("🚦 Analyse de Saturation Piste")
     st.markdown("Compare la charge de vols (PPR + SCR) à la capacité théorique de la piste.")
     
-    # Rendre le choix de la date dynamique
-    available_dates = sorted(combined_df['Slot.Date'].unique())
-    if not available_dates:
-        st.warning("Aucun vol trouvé dans le fichier de prévisions.")
-        return
-
-    date_options = [d.strftime('%d/%m/%Y') for d in available_dates]
-    selected_date_str = st.selectbox(
-        "Choisissez une journée à analyser",
-        date_options,
-        key="saturation_day_selector"
-    )
-
-    if not selected_date_str:
-        return
-
-    jour_choisi = datetime.strptime(selected_date_str, '%d/%m/%Y').date()
+    jour_choisi_str = st.selectbox("Choisissez une journée à analyser", ("Aujourd'hui", "Demain"), key="saturation_day")
+    today = date.today()
+    jour_choisi = today if jour_choisi_str == "Aujourd'hui" else today + timedelta(days=1)
     
     st.header(f"Analyse pour le {jour_choisi.strftime('%d/%m/%Y')}")
 
@@ -330,27 +259,26 @@ def page_saturation_piste(combined_df):
     # --- Display UI ---
     analysis_type = st.radio("Choisissez le type d'analyse", ("Totale", "Arrivées"), horizontal=True)
     
-    with st.spinner("Génération des graphiques en cours..."):
-        if analysis_type == "Totale":
-            value_vars, capacity_col, residual_col = ['Vols PPR', 'Vols SCR'], 'Capacité Totale', 'Capacité Résiduelle Totale'
-        else:
-            value_vars, capacity_col, residual_col = ['Vols PPR Arrivées', 'Vols SCR Arrivées'], 'Capacité Arrivées', 'Capacité Résiduelle Arrivées'
+    if analysis_type == "Totale":
+        value_vars, capacity_col, residual_col = ['Vols PPR', 'Vols SCR'], 'Capacité Totale', 'Capacité Résiduelle Totale'
+    else:
+        value_vars, capacity_col, residual_col = ['Vols PPR Arrivées', 'Vols SCR Arrivées'], 'Capacité Arrivées', 'Capacité Résiduelle Arrivées'
 
-        source = analysis_df.reset_index().rename(columns={'index': 'Heure'})
-        source_melted = source.melt(id_vars=['Heure', capacity_col], value_vars=value_vars, var_name='Type de Vol', value_name='Nombre de Vols')
-        
-        # Graphique de charge
-        bars = alt.Chart(source_melted).mark_bar().encode(x=alt.X('Heure:O', title='Heure'), y=alt.Y('sum(Nombre de Vols):Q', title='Nombre de Vols'), color=alt.Color('Type de Vol:N'), tooltip=['Heure', 'Type de Vol', 'sum(Nombre de Vols)'])
-        line = alt.Chart(source).mark_line(color='red', strokeDash=[5,5]).encode(x='Heure:O', y=f'{capacity_col}:Q', tooltip=['Heure', capacity_col])
-        charge_chart = (bars + line).properties(title=f"Charge {analysis_type} vs. Capacité").resolve_scale(y='shared')
+    source = analysis_df.reset_index().rename(columns={'index': 'Heure'})
+    source_melted = source.melt(id_vars=['Heure', capacity_col], value_vars=value_vars, var_name='Type de Vol', value_name='Nombre de Vols')
+    
+    # Graphique de charge
+    bars = alt.Chart(source_melted).mark_bar().encode(x=alt.X('Heure:O', title='Heure'), y=alt.Y('sum(Nombre de Vols):Q', title='Nombre de Vols'), color=alt.Color('Type de Vol:N'), tooltip=['Heure', 'Type de Vol', 'sum(Nombre de Vols)'])
+    line = alt.Chart(source).mark_line(color='red', strokeDash=[5,5]).encode(x='Heure:O', y=f'{capacity_col}:Q', tooltip=['Heure', capacity_col])
+    charge_chart = (bars + line).properties(title=f"Charge {analysis_type} vs. Capacité").resolve_scale(y='shared')
 
-        # Graphique de capacité résiduelle
-        residual_chart = alt.Chart(source).mark_bar().encode(x=alt.X('Heure:O', title='Heure'), y=alt.Y(f'{residual_col}:Q', title='Capacité Résiduelle'), color=alt.condition(alt.datum[residual_col] >= 0, alt.value('green'), alt.value('red')), tooltip=['Heure', residual_col]).properties(title=f"Capacité Résiduelle {analysis_type}")
-        
-        # Combiner les graphiques verticalement pour aligner les axes
-        combined_chart = alt.vconcat(charge_chart, residual_chart)
-        
-        st.altair_chart(combined_chart, use_container_width=True)
+    # Graphique de capacité résiduelle
+    residual_chart = alt.Chart(source).mark_bar().encode(x=alt.X('Heure:O', title='Heure'), y=alt.Y(f'{residual_col}:Q', title='Capacité Résiduelle'), color=alt.condition(alt.datum[residual_col] >= 0, alt.value('green'), alt.value('red')), tooltip=['Heure', residual_col]).properties(title=f"Capacité Résiduelle {analysis_type}")
+    
+    # Combiner les graphiques verticalement pour aligner les axes
+    combined_chart = alt.vconcat(charge_chart, residual_chart)
+    
+    st.altair_chart(combined_chart, use_container_width=True)
 
     st.subheader("Détails par heure")
     st.dataframe(analysis_df)
@@ -464,4 +392,3 @@ elif page == "Analyse de Saturation Piste":
 
 elif page == "Analyse Post-Opérationnelle":
     page_post_operationnelle()
-
