@@ -59,7 +59,7 @@ def load_and_prepare_data(uploaded_file, file_type):
             })
             required_cols = ['Slot.Date', 'Slot.Hour', 'Login (Suppression)', 'PPR utilisée', 'Date et heure d\'effacement', 'Login', 'Type d\'aéronef']
             if not all(col in raw_df.columns for col in required_cols):
-                st.error(f"Le fichier historique (PBI_PPR_EPL) semble invalide.")
+                st.error(f"Le fichier historique semble invalide.")
                 return None
             return raw_df
             
@@ -490,12 +490,12 @@ elif page == "Analyse Post-Opérationnelle":
     page_post_operationnelle()
 
 elif page == "Analyse Historique":
-    historical_file = st.sidebar.file_uploader("Fichier Historique PPR (`PBI_PPR_EPL.csv`)", type=['csv'], key="ppr_historical")
+    historical_file = st.sidebar.file_uploader("Fichier Historique PPR", type=['xlsx', 'xls'], key="ppr_historical")
     if historical_file is not None:
         st.session_state.historical_data = load_and_prepare_data(historical_file, 'PPR_HISTORICAL')
     
     if st.session_state.historical_data is not None:
         page_analyse_historique(st.session_state.historical_data)
     else:
-        st.info("Veuillez charger le fichier historique des réservations PPR (format PBI_PPR_EPL).")
+        st.info("Veuillez charger le fichier historique des réservations PPR .")
 
