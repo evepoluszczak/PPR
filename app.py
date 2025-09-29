@@ -66,8 +66,8 @@ def load_and_prepare_data(uploaded_file, file_type):
         return None
 
 @st.cache_data
-def process_ppr_data(df):
-    """Applique la logique de détection de doublons."""
+def process_ppr_data(df, analysis_dates):
+    """Applique la logique de détection de doublons pour des dates spécifiques."""
     try:
         df_copy = df.copy()
         df_copy['Slot.Date'] = pd.to_datetime(df_copy['Slot.Date'], errors='coerce').dt.date
@@ -78,9 +78,10 @@ def process_ppr_data(df):
         duplicates = active_ppr[active_ppr['Nb de lignes'] > 1].copy()
         if 'Call sign' in duplicates.columns:
             duplicates = duplicates[duplicates['Call sign'] != 'RWYCHK']
-        today = date.today()
-        tomorrow = today + timedelta(days=1)
-        duplicates = duplicates[duplicates['Slot.Date'].isin([today, tomorrow])]
+        
+        # Utiliser les dates fournies pour l'analyse
+        duplicates = duplicates[duplicates['Slot.Date'].isin(analysis_dates)]
+
         if duplicates.empty: return pd.DataFrame()
         duplicates.sort_values(by=group_cols + ['Slot.Hour'], inplace=True)
         duplicates['Next_Slot.Hour'] = duplicates.groupby(group_cols)['Slot.Hour'].shift(-1)
@@ -101,22 +102,48 @@ def process_ppr_data(df):
 def page_detection_doublons(df):
     """Affiche la page de détection des doublons."""
     st.title("✈️ Outil de détection et de suivi des PPR")
-    st.markdown("Analyse des doublons et liste des vols pour **aujourd'hui** et **demain**.")
-    st.header("📊 Tableau de bord")
-    today = date.today()
-    tomorrow = today + timedelta(days=1)
+
     active_ppr_full = df[df['Login (Suppression)'].isnull()].copy()
     active_ppr_full['Slot.Date'] = pd.to_datetime(active_ppr_full['Slot.Date']).dt.date
-    ppr_today_count = active_ppr_full[active_ppr_full['Slot.Date'] == today].shape[0]
-    ppr_tomorrow_count = active_ppr_full[active_ppr_full['Slot.Date'] == tomorrow].shape[0]
-    result_df = process_ppr_data(df)
+    
+    # Rendre les dates d'analyse dynamiques
+    available_dates = sorted(active_ppr_full['Slot.Date'].unique())
+    
+    if len(available_dates) == 0:
+        st.warning("Aucun vol actif trouvé dans le fichier chargé.")
+        return
+
+    analysis_dates = available_dates[:2] # Analyser les deux premiers jours trouvés
+    
+    # Mettre à jour le sous-titre dynamiquement
+    if len(analysis_dates) == 2:
+        date1_str = analysis_dates[0].strftime('%d/%m/%Y')
+        date2_str = analysis_dates[1].strftime('%d/%m/%Y')
+        st.markdown(f"Analyse des doublons et liste des vols pour le **{date1_str}** et le **{date2_str}**.")
+    else:
+        date1_str = analysis_dates[0].strftime('%d/%m/%Y')
+        st.markdown(f"Analyse des doublons et liste des vols pour le **{date1_str}**.")
+
+    st.header("📊 Tableau de bord")
+    
+    ppr_day1_count = active_ppr_full[active_ppr_full['Slot.Date'] == analysis_dates[0]].shape[0]
+    ppr_day2_count = 0
+    if len(analysis_dates) > 1:
+        ppr_day2_count = active_ppr_full[active_ppr_full['Slot.Date'] == analysis_dates[1]].shape[0]
+
+    result_df = process_ppr_data(df, analysis_dates)
     num_anomalies = 0
     if not result_df.empty:
         num_anomalies = result_df[result_df['Check'] != ''].shape[0]
+        
     col1, col2, col3 = st.columns(3)
-    col1.metric("PPR prévus aujourd'hui", ppr_today_count)
-    col2.metric("PPR prévus demain", ppr_tomorrow_count)
+    col1.metric(f"PPR prévus le {analysis_dates[0].strftime('%d/%m')}", ppr_day1_count)
+    if len(analysis_dates) > 1:
+        col2.metric(f"PPR prévus le {analysis_dates[1].strftime('%d/%m')}", ppr_day2_count)
+    else:
+        col2.metric("PPR prévus J+1", 0) # Placeholder
     col3.metric("Anomalies détectées", num_anomalies, help="Nombre de paires de vols problématiques.")
+    
     st.header("🚨 Analyse des Doublons")
     summary_df = pd.DataFrame()
     if num_anomalies > 0:
@@ -165,13 +192,13 @@ def page_detection_doublons(df):
         else:
             st.info("Aucune anomalie à signaler.")
     st.header("📋 Liste des PPR Actifs")
-    active_ppr_j0_j1 = active_ppr_full[active_ppr_full['Slot.Date'].isin([today, tomorrow])].copy()
-    active_ppr_j0_j1.sort_values(by=['Slot.Date', 'Immatriculation', 'Slot.Hour'], inplace=True)
+    active_ppr_filtered_days = active_ppr_full[active_ppr_full['Slot.Date'].isin(analysis_dates)].copy()
+    active_ppr_filtered_days.sort_values(by=['Slot.Date', 'Immatriculation', 'Slot.Hour'], inplace=True)
     with st.expander("Afficher/Masquer la liste complète", expanded=False):
         filter_text = st.text_input("Filtrer la liste :", placeholder="Ex: HBLVK, T7-SCT, SFS...")
         display_cols = ['Slot.Date', 'Immatriculation', 'Call sign', 'Slot.Hour', 'Type de mouvement', 'HandlingAgentName', 'OwnerProfileLogin']
-        display_cols_exist = [col for col in display_cols if col in active_ppr_j0_j1.columns]
-        filtered_list = active_ppr_j0_j1
+        display_cols_exist = [col for col in display_cols if col in active_ppr_filtered_days.columns]
+        filtered_list = active_ppr_filtered_days
         if filter_text:
             mask = np.column_stack([filtered_list[col].astype(str).str.contains(filter_text, case=False, na=False) for col in display_cols_exist])
             filtered_list = filtered_list[mask.any(axis=1)]
@@ -180,15 +207,29 @@ def page_detection_doublons(df):
 def page_analyse_visuelle(df):
     """Affiche la page d'analyse PPR avec des graphiques."""
     st.title("📊 Analyse & Visualisations des PPR")
-    today = date.today()
-    tomorrow = today + timedelta(days=1)
+    
     active_ppr = df[df['Login (Suppression)'].isnull()].copy()
     active_ppr['Slot.Date'] = pd.to_datetime(active_ppr['Slot.Date']).dt.date
-    jour_choisi_str = st.selectbox("Choisissez une journée à analyser", ("Aujourd'hui", "Demain"))
+    
+    # Rendre le choix de la date dynamique
+    available_dates = sorted(active_ppr['Slot.Date'].unique())
+    
+    if not available_dates:
+        st.warning("Aucun vol actif trouvé dans le fichier chargé pour la visualisation.")
+        return
+
+    # Formatter les dates pour l'affichage dans le selectbox
+    date_options = [d.strftime('%d/%m/%Y') for d in available_dates]
+    selected_date_str = st.selectbox("Choisissez une journée à analyser", date_options)
+    
+    # Convertir la chaîne de caractères sélectionnée en objet date
+    jour_choisi = datetime.strptime(selected_date_str, '%d/%m/%Y').date()
+
     show_rwy_check = st.checkbox("Mettre en évidence les RWYCHK")
-    jour_choisi = today if jour_choisi_str == "Aujourd'hui" else tomorrow
+    
     st.header(f"Nombre de vols par heure pour le {jour_choisi.strftime('%d/%m/%Y')}")
     df_jour = active_ppr[active_ppr['Slot.Date'] == jour_choisi].copy()
+    
     if df_jour.empty:
         st.warning(f"Aucun vol PPR prévu pour le {jour_choisi.strftime('%d/%m/%Y')}.")
     else:
