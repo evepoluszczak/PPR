@@ -330,26 +330,27 @@ def page_saturation_piste(combined_df):
     # --- Display UI ---
     analysis_type = st.radio("Choisissez le type d'analyse", ("Totale", "Arrivées"), horizontal=True)
     
-    if analysis_type == "Totale":
-        value_vars, capacity_col, residual_col = ['Vols PPR', 'Vols SCR'], 'Capacité Totale', 'Capacité Résiduelle Totale'
-    else:
-        value_vars, capacity_col, residual_col = ['Vols PPR Arrivées', 'Vols SCR Arrivées'], 'Capacité Arrivées', 'Capacité Résiduelle Arrivées'
+    with st.spinner("Génération des graphiques en cours..."):
+        if analysis_type == "Totale":
+            value_vars, capacity_col, residual_col = ['Vols PPR', 'Vols SCR'], 'Capacité Totale', 'Capacité Résiduelle Totale'
+        else:
+            value_vars, capacity_col, residual_col = ['Vols PPR Arrivées', 'Vols SCR Arrivées'], 'Capacité Arrivées', 'Capacité Résiduelle Arrivées'
 
-    source = analysis_df.reset_index().rename(columns={'index': 'Heure'})
-    source_melted = source.melt(id_vars=['Heure', capacity_col], value_vars=value_vars, var_name='Type de Vol', value_name='Nombre de Vols')
-    
-    # Graphique de charge
-    bars = alt.Chart(source_melted).mark_bar().encode(x=alt.X('Heure:O', title='Heure'), y=alt.Y('sum(Nombre de Vols):Q', title='Nombre de Vols'), color=alt.Color('Type de Vol:N'), tooltip=['Heure', 'Type de Vol', 'sum(Nombre de Vols)'])
-    line = alt.Chart(source).mark_line(color='red', strokeDash=[5,5]).encode(x='Heure:O', y=f'{capacity_col}:Q', tooltip=['Heure', capacity_col])
-    charge_chart = (bars + line).properties(title=f"Charge {analysis_type} vs. Capacité").resolve_scale(y='shared')
+        source = analysis_df.reset_index().rename(columns={'index': 'Heure'})
+        source_melted = source.melt(id_vars=['Heure', capacity_col], value_vars=value_vars, var_name='Type de Vol', value_name='Nombre de Vols')
+        
+        # Graphique de charge
+        bars = alt.Chart(source_melted).mark_bar().encode(x=alt.X('Heure:O', title='Heure'), y=alt.Y('sum(Nombre de Vols):Q', title='Nombre de Vols'), color=alt.Color('Type de Vol:N'), tooltip=['Heure', 'Type de Vol', 'sum(Nombre de Vols)'])
+        line = alt.Chart(source).mark_line(color='red', strokeDash=[5,5]).encode(x='Heure:O', y=f'{capacity_col}:Q', tooltip=['Heure', capacity_col])
+        charge_chart = (bars + line).properties(title=f"Charge {analysis_type} vs. Capacité").resolve_scale(y='shared')
 
-    # Graphique de capacité résiduelle
-    residual_chart = alt.Chart(source).mark_bar().encode(x=alt.X('Heure:O', title='Heure'), y=alt.Y(f'{residual_col}:Q', title='Capacité Résiduelle'), color=alt.condition(alt.datum[residual_col] >= 0, alt.value('green'), alt.value('red')), tooltip=['Heure', residual_col]).properties(title=f"Capacité Résiduelle {analysis_type}")
-    
-    # Combiner les graphiques verticalement pour aligner les axes
-    combined_chart = alt.vconcat(charge_chart, residual_chart)
-    
-    st.altair_chart(combined_chart, use_container_width=True)
+        # Graphique de capacité résiduelle
+        residual_chart = alt.Chart(source).mark_bar().encode(x=alt.X('Heure:O', title='Heure'), y=alt.Y(f'{residual_col}:Q', title='Capacité Résiduelle'), color=alt.condition(alt.datum[residual_col] >= 0, alt.value('green'), alt.value('red')), tooltip=['Heure', residual_col]).properties(title=f"Capacité Résiduelle {analysis_type}")
+        
+        # Combiner les graphiques verticalement pour aligner les axes
+        combined_chart = alt.vconcat(charge_chart, residual_chart)
+        
+        st.altair_chart(combined_chart, use_container_width=True)
 
     st.subheader("Détails par heure")
     st.dataframe(analysis_df)
