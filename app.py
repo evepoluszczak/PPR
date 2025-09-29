@@ -309,9 +309,13 @@ def page_saturation_piste(combined_df):
     # Total counts
     total_counts = df_jour.groupby('Heure')[['Vols PPR', 'Vols SCR']].sum()
     
-    # Arrival counts
+    # Arrival counts - CORRECTED LOGIC
     df_jour_arrivals = df_jour[df_jour['Arrival - Departure'] == 'Arrival']
-    arrival_counts = df_jour_arrivals.groupby('Heure')[['Vols PPR', 'Vols SCR']].sum().rename(columns={'Vols PPR': 'Vols PPR Arrivées', 'Vols SCR': 'Vols SCR Arrivées'})
+    if not df_jour_arrivals.empty:
+        arrival_counts = df_jour_arrivals.groupby('Heure')[['Vols PPR', 'Vols SCR']].sum().rename(columns={'Vols PPR': 'Vols PPR Arrivées', 'Vols SCR': 'Vols SCR Arrivées'})
+    else:
+        # Create an empty DataFrame with the correct column names if there are no arrivals
+        arrival_counts = pd.DataFrame(columns=['Vols PPR Arrivées', 'Vols SCR Arrivées'])
 
     # --- Combine DataFrames ---
     analysis_df = pd.DataFrame(index=range(24))
@@ -441,16 +445,26 @@ page = st.sidebar.radio("Choisissez une page", ["Détection Doublons", "Analyse 
 st.sidebar.title("Fichiers de données")
 
 # --- Logique de chargement et d'affichage des pages ---
-if page in ["Détection Doublons", "Analyse & Visualisations"]:
+if page == "Détection Doublons":
     ppr_uploaded_file = st.sidebar.file_uploader("Fichier PPR Détaillé (`Reservations.csv`)", type=['csv'])
     if ppr_uploaded_file is not None:
         st.session_state.ppr_data = load_and_prepare_data(ppr_uploaded_file, 'PPR_DETAIL')
     
     if st.session_state.ppr_data is not None:
-        if page == "Détection Doublons": page_detection_doublons(st.session_state.ppr_data)
-        elif page == "Analyse & Visualisations": page_analyse_visuelle(st.session_state.ppr_data)
+        page_detection_doublons(st.session_state.ppr_data)
     else:
         st.info("Veuillez charger un fichier PPR détaillé. [Lien pour récupérer le fichier](https://ppr.gva.ch/Reservations/Index).")
+
+elif page == "Analyse & Visualisations":
+    vis_uploaded_file = st.sidebar.file_uploader("Fichier PPR Riche (`PBI_PPR_EPL.xlsx`)", type=['xlsx', 'xls'], key="ppr_rich_vis")
+    if vis_uploaded_file is not None:
+        st.session_state.vis_data = load_and_prepare_data(vis_uploaded_file, 'PPR_RICH')
+    
+    if st.session_state.vis_data is not None:
+        page_analyse_visuelle(st.session_state.vis_data)
+    else:
+        st.info("Veuillez charger un fichier PPR riche (format PBI_PPR_EPL) pour les visualisations.")
+
 
 elif page == "Analyse de Saturation Piste":
     saturation_file = st.sidebar.file_uploader("Fichier Prévisions (PPR+SCR)", type=['xlsx', 'xls'])
