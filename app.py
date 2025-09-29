@@ -174,24 +174,50 @@ def page_detection_doublons(df):
                 for login in logins_to_notify:
                     with st.expander(f"Mail pour {login}"):
                         user_anomalies = summary_df[summary_df['OwnerProfileLogin'] == login]
-                        mail_body_lines = ["Bonjour,", "\nNos systèmes ont détecté des anomalies dans vos réservations PPR. Pourriez-vous les corriger ?\n"]
+                        
+                        # --- French part ---
+                        mail_body_lines_fr = [
+                            "Bonjour,",
+                            "\nNous avons remarqué les doublons suivants sous votre compte PPR :\n",
+                        ]
+                        
+                        table_lines = []
+                        # Markdown table header
+                        table_lines.append("| Date | Immatriculation | CallSign | Slot 1 | Slot 2 | Motif |")
+                        table_lines.append("|:---|:---|:---|:---|:---|:---|")
+                        
                         for index, row in user_anomalies.iterrows():
-                            # Traduction du type de mouvement
                             movement_translation = {'Arrival': 'Arrivée', 'Departure': 'Départ'}
                             translated_movement = movement_translation.get(row['Type de mouvement'], row['Type de mouvement'])
-                            
-                            # Motif de l'anomalie
                             reason = "Horaires identiques" if row['Check'] == 'Erreur' else f"Deux '{translated_movement}' consécutifs"
-                            
-                            # Formatage de la date
                             flight_date = row['Slot.Date'].strftime('%d/%m/%Y')
+                            slot1 = row['Slot.Hour'].strftime('%H:%M') if pd.notna(row['Slot.Hour']) else 'N/A'
+                            slot2 = row['Next_Slot.Hour'].strftime('%H:%M') if pd.notna(row['Next_Slot.Hour']) else 'N/A'
+                            immat = str(row['Immatriculation'])
+                            callsign = str(row.get('Call sign', 'N/A'))
                             
-                            # Ligne de texte pour l'e-mail
-                            line = f"- Vol du {flight_date}, Immat: {row['Immatriculation']}, CallSign: {row.get('Call sign', 'N/A')}, Slots: {row['Slot.Hour']} & {row['Next_Slot.Hour']} -> Motif: {reason}"
-                            mail_body_lines.append(line)
-                        mail_body_lines.extend(["\nMerci de votre collaboration.", "Cordialement,"])
-                        full_mail_text = "\n".join(mail_body_lines)
-                        st.text_area("Texte à copier :", full_mail_text, height=250, key=f"mail_{login.replace('.', '_')}")
+                            table_lines.append(f"| {flight_date} | {immat} | {callsign} | {slot1} | {slot2} | {reason} |")
+
+                        mail_body_lines_fr.extend(table_lines)
+                        mail_body_lines_fr.extend([
+                            "\nNous vous remercions de bien vouloir vérifier ces PPR pour une mise en conformité de la capacité réservée.",
+                            "\nCordiales salutations,"
+                        ])
+
+                        # --- English part ---
+                        mail_body_lines_en = [
+                            "\n\n______\n\n",
+                            "Hello,",
+                            "\nWe have noticed the following duplicates under your PPR account:\n"
+                        ]
+                        mail_body_lines_en.extend(table_lines) # Reuse the same table
+                        mail_body_lines_en.extend([
+                            "\nWe would be grateful if you could check these PPRs to ensure that the booked capacity is correct.",
+                            "\nBest regards,"
+                        ])
+
+                        full_mail_text = "\n".join(mail_body_lines_fr + mail_body_lines_en)
+                        st.text_area("Texte à copier :", full_mail_text, height=400, key=f"mail_{login.replace('.', '_')}")
             else:
                 st.write("Aucun login associé aux anomalies.")
         else:
