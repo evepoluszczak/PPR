@@ -50,6 +50,11 @@ def load_and_prepare_data(uploaded_file, file_type):
 
         elif file_type == 'COMBINED': # Pour la saturation et l'analyse post-op
             raw_df = pd.read_excel(uploaded_file)
+            # Adapter aux nouveaux noms de colonnes du fichier de prévision
+            if 'Arrival - Departure Code' in raw_df.columns:
+                 raw_df.rename(columns={'Arrival - Departure Code': 'Arrival - Departure'}, inplace=True)
+                 raw_df['Arrival - Departure'] = raw_df['Arrival - Departure'].map({'A': 'Arrival', 'D': 'Departure'})
+
             required_cols = ['Date', 'Heure_Local_Tab', 'Rotation', 'Nombre de réservations']
             if not all(col in raw_df.columns for col in required_cols):
                 st.error(f"Le fichier combiné (PPR+SCR) semble invalide.")
@@ -263,9 +268,23 @@ def page_saturation_piste(combined_df):
     st.title("🚦 Analyse de Saturation Piste")
     st.markdown("Compare la charge de vols (PPR + SCR) à la capacité théorique de la piste.")
     
-    jour_choisi_str = st.selectbox("Choisissez une journée à analyser", ("Aujourd'hui", "Demain"), key="saturation_day")
-    today = date.today()
-    jour_choisi = today if jour_choisi_str == "Aujourd'hui" else today + timedelta(days=1)
+    # Rendre le choix de la date dynamique
+    available_dates = sorted(combined_df['Slot.Date'].unique())
+    if not available_dates:
+        st.warning("Aucun vol trouvé dans le fichier de prévisions.")
+        return
+
+    date_options = [d.strftime('%d/%m/%Y') for d in available_dates]
+    selected_date_str = st.selectbox(
+        "Choisissez une journée à analyser",
+        date_options,
+        key="saturation_day_selector"
+    )
+
+    if not selected_date_str:
+        return
+
+    jour_choisi = datetime.strptime(selected_date_str, '%d/%m/%Y').date()
     
     st.header(f"Analyse pour le {jour_choisi.strftime('%d/%m/%Y')}")
 
