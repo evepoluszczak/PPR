@@ -263,36 +263,14 @@ def get_season(dt):
     winter_start = datetime(year, 10, oct_last_sun)
     return "Summer" if summer_start <= datetime(year, dt.month, dt.day) < winter_start else "Winter"
 
-def page_saturation_piste(combined_df):
-    """Affiche la page d'analyse de la saturation de la piste."""
-    st.title("🚦 Analyse de Saturation Piste")
-    st.markdown("Compare la charge de vols (PPR + SCR) à la capacité théorique de la piste.")
-    
-    # Rendre le choix de la date dynamique
-    available_dates = sorted(combined_df['Slot.Date'].unique())
-    if not available_dates:
-        st.warning("Aucun vol trouvé dans le fichier de prévisions.")
-        return
-
-    date_options = [d.strftime('%d/%m/%Y') for d in available_dates]
-    selected_date_str = st.selectbox(
-        "Choisissez une journée à analyser",
-        date_options,
-        key="saturation_day_selector"
-    )
-
-    if not selected_date_str:
-        return
-
-    jour_choisi = datetime.strptime(selected_date_str, '%d/%m/%Y').date()
-    
-    st.header(f"Analyse pour le {jour_choisi.strftime('%d/%m/%Y')}")
-
+@st.cache_data
+def get_analysis_dataframe(combined_df, jour_choisi):
+    """Calcule et met en cache le dataframe d'analyse pour la saturation de la piste."""
     try:
         capacities_df = pd.read_excel(CAPACITIES_FILE)
     except FileNotFoundError:
         st.error(f"Fichier de capacités '{CAPACITIES_FILE}' non trouvé.")
-        return
+        return None
 
     season = get_season(jour_choisi)
     day_name = jour_choisi.strftime('%A')
@@ -300,7 +278,7 @@ def page_saturation_piste(combined_df):
     capacity_day_df = capacities_df[(capacities_df['Saison'] == season) & (capacities_df['JourSemaine'] == day_name)]
     if capacity_day_df.empty:
         st.error(f"Impossible de trouver les capacités pour {season} / {day_name}.")
-        return
+        return None
     capacity_day_df = capacity_day_df.set_index('Heure')[['Capacité Totale', 'Capacité Arrivées']]
 
     # --- Aggregate data from combined file ---
@@ -330,7 +308,38 @@ def page_saturation_piste(combined_df):
     analysis_df['Total Vols Arrivées'] = analysis_df['Vols PPR Arrivées'] + analysis_df['Vols SCR Arrivées']
     analysis_df['Capacité Résiduelle Totale'] = analysis_df['Capacité Totale'] - analysis_df['Total Vols']
     analysis_df['Capacité Résiduelle Arrivées'] = analysis_df['Capacité Arrivées'] - analysis_df['Total Vols Arrivées']
-    analysis_df = analysis_df.astype(int)
+    return analysis_df.astype(int)
+
+def page_saturation_piste(combined_df):
+    """Affiche la page d'analyse de la saturation de la piste."""
+    st.title("🚦 Analyse de Saturation Piste")
+    st.markdown("Compare la charge de vols (PPR + SCR) à la capacité théorique de la piste.")
+    
+    # Rendre le choix de la date dynamique
+    available_dates = sorted(combined_df['Slot.Date'].unique())
+    if not available_dates:
+        st.warning("Aucun vol trouvé dans le fichier de prévisions.")
+        return
+
+    date_options = [d.strftime('%d/%m/%Y') for d in available_dates]
+    selected_date_str = st.selectbox(
+        "Choisissez une journée à analyser",
+        date_options,
+        key="saturation_day_selector"
+    )
+
+    if not selected_date_str:
+        return
+
+    jour_choisi = datetime.strptime(selected_date_str, '%d/%m/%Y').date()
+    
+    st.header(f"Analyse pour le {jour_choisi.strftime('%d/%m/%Y')}")
+
+    # Utiliser la fonction mise en cache
+    analysis_df = get_analysis_dataframe(combined_df, jour_choisi)
+
+    if analysis_df is None:
+        return # Erreur gérée dans la fonction de calcul
 
     # --- Display UI ---
     analysis_type = st.radio("Choisissez le type d'analyse", ("Totale", "Arrivées"), horizontal=True)
