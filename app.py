@@ -46,6 +46,7 @@ def load_and_prepare_data(uploaded_file, file_type):
             raw_df.loc[raw_df['Deleted'] == True, 'Login (Suppression)'] = 'Deleted'
             movement_map = {True: 'Arrival', False: 'Departure'}
             raw_df['Type de mouvement'] = raw_df['MovementTypeId'].map(movement_map)
+            return raw_df
 
         elif file_type == 'COMBINED': # Pour la saturation et l'analyse post-op
             raw_df = pd.read_excel(uploaded_file)
@@ -58,8 +59,8 @@ def load_and_prepare_data(uploaded_file, file_type):
             # Renommer pour clarté
             raw_df.rename(columns={'Rotation': 'Vols SCR', 'Nombre de réservations': 'Vols PPR'}, inplace=True)
             raw_df['Vols PPR'] = raw_df['Vols PPR'].fillna(0).astype(int) # Gérer les cas où il n'y a pas de PPR
-
-        return raw_df
+            return raw_df
+            
     except Exception as e:
         st.error(f"Erreur lors de la lecture du fichier {file_type}: {e}")
         return None
@@ -143,8 +144,18 @@ def page_detection_doublons(df):
                         user_anomalies = summary_df[summary_df['OwnerProfileLogin'] == login]
                         mail_body_lines = ["Bonjour,", "\nNos systèmes ont détecté des anomalies dans vos réservations PPR. Pourriez-vous les corriger ?\n"]
                         for index, row in user_anomalies.iterrows():
-                            reason = "Horaires identiques" if row['Check'] == 'Erreur' else f"Deux '{row['Type de mouvement']}' consécutifs"
-                            line = f"- Immat: {row['Immatriculation']}, CallSign: {row.get('Call sign', 'N/A')}, Slots: {row['Slot.Hour']} & {row['Next_Slot.Hour']} -> Motif: {reason}"
+                            # Traduction du type de mouvement
+                            movement_translation = {'Arrival': 'Arrivée', 'Departure': 'Départ'}
+                            translated_movement = movement_translation.get(row['Type de mouvement'], row['Type de mouvement'])
+                            
+                            # Motif de l'anomalie
+                            reason = "Horaires identiques" if row['Check'] == 'Erreur' else f"Deux '{translated_movement}' consécutifs"
+                            
+                            # Formatage de la date
+                            flight_date = row['Slot.Date'].strftime('%d/%m/%Y')
+                            
+                            # Ligne de texte pour l'e-mail
+                            line = f"- Vol du {flight_date}, Immat: {row['Immatriculation']}, CallSign: {row.get('Call sign', 'N/A')}, Slots: {row['Slot.Hour']} & {row['Next_Slot.Hour']} -> Motif: {reason}"
                             mail_body_lines.append(line)
                         mail_body_lines.extend(["\nMerci de votre collaboration.", "Cordialement,"])
                         full_mail_text = "\n".join(mail_body_lines)
@@ -392,3 +403,4 @@ elif page == "Analyse de Saturation Piste":
 
 elif page == "Analyse Post-Opérationnelle":
     page_post_operationnelle()
+
