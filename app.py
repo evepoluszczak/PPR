@@ -21,8 +21,6 @@ if 'predicted_data' not in st.session_state:
     st.session_state.predicted_data = None
 if 'actual_data' not in st.session_state:
     st.session_state.actual_data = None
-if 'vis_data' not in st.session_state:
-    st.session_state.vis_data = None
 
 # --- Fichiers de données statiques ---
 CAPACITIES_FILE = 'capacities.xlsx'
@@ -48,20 +46,6 @@ def load_and_prepare_data(uploaded_file, file_type):
             raw_df.loc[raw_df['Deleted'] == True, 'Login (Suppression)'] = 'Deleted'
             movement_map = {True: 'Arrival', False: 'Departure'}
             raw_df['Type de mouvement'] = raw_df['MovementTypeId'].map(movement_map)
-            return raw_df
-        
-        elif file_type == 'PPR_RICH': # Fichier riche pour les visualisations
-            raw_df = pd.read_excel(uploaded_file, skiprows=1)
-            raw_df = raw_df.rename(columns={
-                'Slot Réservation.Date': 'Slot.Date',
-                'Heure': 'Slot.Hour',
-            })
-            required_cols = ['Slot.Date', 'Slot.Hour', 'Login (Suppression)', 'Call sign', 'Type de client', 'Type de profil']
-            if not all(col in raw_df.columns for col in required_cols):
-                st.error(f"Le fichier PPR riche (PBI_PPR_EPL) semble invalide.")
-                return None
-            raw_df['Slot.Date'] = pd.to_datetime(raw_df['Slot.Date'], errors='coerce').dt.date
-            raw_df['Slot.Hour'] = pd.to_datetime(raw_df['Slot.Hour'].astype(str), errors='coerce').dt.time
             return raw_df
 
         elif file_type == 'COMBINED': # Pour la saturation et l'analyse post-op
@@ -239,53 +223,34 @@ def page_analyse_visuelle(df):
         st.warning("Aucun vol actif trouvé dans le fichier chargé pour la visualisation.")
         return
 
+    # Formatter les dates pour l'affichage dans le selectbox
     date_options = [d.strftime('%d/%m/%Y') for d in available_dates]
     selected_date_str = st.selectbox("Choisissez une journée à analyser", date_options)
     
+    # Convertir la chaîne de caractères sélectionnée en objet date
     jour_choisi = datetime.strptime(selected_date_str, '%d/%m/%Y').date()
 
     show_rwy_check = st.checkbox("Mettre en évidence les RWYCHK")
     
-    st.header(f"Analyse pour le {jour_choisi.strftime('%d/%m/%Y')}")
+    st.header(f"Nombre de vols par heure pour le {jour_choisi.strftime('%d/%m/%Y')}")
     df_jour = active_ppr[active_ppr['Slot.Date'] == jour_choisi].copy()
     
     if df_jour.empty:
         st.warning(f"Aucun vol PPR prévu pour le {jour_choisi.strftime('%d/%m/%Y')}.")
-        return
-
-    st.subheader("Nombre de vols par heure")
-    df_jour['Heure'] = df_jour['Slot.Hour'].apply(lambda t: t.hour)
-    df_flights = df_jour[df_jour['Call sign'] != 'RWYCHK']
-    vols_par_heure = df_flights.groupby(['Heure', 'Type de mouvement']).size().unstack(fill_value=0)
-    vols_par_heure = vols_par_heure.reindex(range(24), fill_value=0)
-    if 'Arrivée' not in vols_par_heure.columns: vols_par_heure['Arrivée'] = 0
-    if 'Départ' not in vols_par_heure.columns: vols_par_heure['Départ'] = 0
-    if show_rwy_check:
-        df_rwy = df_jour[df_jour['Call sign'] == 'RWYCHK']
-        if not df_rwy.empty:
-            rwy_par_heure = df_rwy.groupby('Heure').size().rename('RWYCHK')
-            vols_par_heure = pd.concat([vols_par_heure, rwy_par_heure], axis=1).fillna(0)
-            vols_par_heure['RWYCHK'] = vols_par_heure['RWYCHK'].astype(int)
-    st.bar_chart(vols_par_heure)
-
-    # --- Nouveaux graphiques ---
-    st.header("Analyse par Type")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.subheader("Vols par Type de Client")
-        if 'Type de client' in df_jour.columns:
-            client_type_counts = df_jour['Type de client'].value_counts()
-            st.bar_chart(client_type_counts)
-        else:
-            st.warning("La colonne 'Type de client' n'est pas disponible.")
-    with col2:
-        st.subheader("Vols par Type de Profil")
-        if 'Type de profil' in df_jour.columns:
-            profile_type_counts = df_jour['Type de profil'].value_counts()
-            st.bar_chart(profile_type_counts)
-        else:
-            st.warning("La colonne 'Type de profil' n'est pas disponible.")
-
+    else:
+        df_jour['Heure'] = df_jour['Slot.Hour'].apply(lambda t: t.hour)
+        df_flights = df_jour[df_jour['Call sign'] != 'RWYCHK']
+        vols_par_heure = df_flights.groupby(['Heure', 'Type de mouvement']).size().unstack(fill_value=0)
+        vols_par_heure = vols_par_heure.reindex(range(24), fill_value=0)
+        if 'Arrival' in vols_par_heure.columns: vols_par_heure.rename(columns={'Arrival': 'Arrivées'}, inplace=True)
+        if 'Departure' in vols_par_heure.columns: vols_par_heure.rename(columns={'Departure': 'Départs'}, inplace=True)
+        if show_rwy_check:
+            df_rwy = df_jour[df_jour['Call sign'] == 'RWYCHK']
+            if not df_rwy.empty:
+                rwy_par_heure = df_rwy.groupby('Heure').size().rename('RWYCHK')
+                vols_par_heure = pd.concat([vols_par_heure, rwy_par_heure], axis=1).fillna(0)
+                vols_par_heure['RWYCHK'] = vols_par_heure['RWYCHK'].astype(int)
+        st.bar_chart(vols_par_heure)
 
 def get_season(dt):
     """Détermine la saison IATA (Winter/Summer) pour une date donnée."""
@@ -365,27 +330,26 @@ def page_saturation_piste(combined_df):
     # --- Display UI ---
     analysis_type = st.radio("Choisissez le type d'analyse", ("Totale", "Arrivées"), horizontal=True)
     
-    with st.spinner("Génération des graphiques en cours..."):
-        if analysis_type == "Totale":
-            value_vars, capacity_col, residual_col = ['Vols PPR', 'Vols SCR'], 'Capacité Totale', 'Capacité Résiduelle Totale'
-        else:
-            value_vars, capacity_col, residual_col = ['Vols PPR Arrivées', 'Vols SCR Arrivées'], 'Capacité Arrivées', 'Capacité Résiduelle Arrivées'
+    if analysis_type == "Totale":
+        value_vars, capacity_col, residual_col = ['Vols PPR', 'Vols SCR'], 'Capacité Totale', 'Capacité Résiduelle Totale'
+    else:
+        value_vars, capacity_col, residual_col = ['Vols PPR Arrivées', 'Vols SCR Arrivées'], 'Capacité Arrivées', 'Capacité Résiduelle Arrivées'
 
-        source = analysis_df.reset_index().rename(columns={'index': 'Heure'})
-        source_melted = source.melt(id_vars=['Heure', capacity_col], value_vars=value_vars, var_name='Type de Vol', value_name='Nombre de Vols')
-        
-        # Graphique de charge
-        bars = alt.Chart(source_melted).mark_bar().encode(x=alt.X('Heure:O', title='Heure'), y=alt.Y('sum(Nombre de Vols):Q', title='Nombre de Vols'), color=alt.Color('Type de Vol:N'), tooltip=['Heure', 'Type de Vol', 'sum(Nombre de Vols)'])
-        line = alt.Chart(source).mark_line(color='red', strokeDash=[5,5]).encode(x='Heure:O', y=f'{capacity_col}:Q', tooltip=['Heure', capacity_col])
-        charge_chart = (bars + line).properties(title=f"Charge {analysis_type} vs. Capacité").resolve_scale(y='shared')
+    source = analysis_df.reset_index().rename(columns={'index': 'Heure'})
+    source_melted = source.melt(id_vars=['Heure', capacity_col], value_vars=value_vars, var_name='Type de Vol', value_name='Nombre de Vols')
+    
+    # Graphique de charge
+    bars = alt.Chart(source_melted).mark_bar().encode(x=alt.X('Heure:O', title='Heure'), y=alt.Y('sum(Nombre de Vols):Q', title='Nombre de Vols'), color=alt.Color('Type de Vol:N'), tooltip=['Heure', 'Type de Vol', 'sum(Nombre de Vols)'])
+    line = alt.Chart(source).mark_line(color='red', strokeDash=[5,5]).encode(x='Heure:O', y=f'{capacity_col}:Q', tooltip=['Heure', capacity_col])
+    charge_chart = (bars + line).properties(title=f"Charge {analysis_type} vs. Capacité").resolve_scale(y='shared')
 
-        # Graphique de capacité résiduelle
-        residual_chart = alt.Chart(source).mark_bar().encode(x=alt.X('Heure:O', title='Heure'), y=alt.Y(f'{residual_col}:Q', title='Capacité Résiduelle'), color=alt.condition(alt.datum[residual_col] >= 0, alt.value('green'), alt.value('red')), tooltip=['Heure', residual_col]).properties(title=f"Capacité Résiduelle {analysis_type}")
-        
-        # Combiner les graphiques verticalement pour aligner les axes
-        combined_chart = alt.vconcat(charge_chart, residual_chart)
-        
-        st.altair_chart(combined_chart, use_container_width=True)
+    # Graphique de capacité résiduelle
+    residual_chart = alt.Chart(source).mark_bar().encode(x=alt.X('Heure:O', title='Heure'), y=alt.Y(f'{residual_col}:Q', title='Capacité Résiduelle'), color=alt.condition(alt.datum[residual_col] >= 0, alt.value('green'), alt.value('red')), tooltip=['Heure', residual_col]).properties(title=f"Capacité Résiduelle {analysis_type}")
+    
+    # Combiner les graphiques verticalement pour aligner les axes
+    combined_chart = alt.vconcat(charge_chart, residual_chart)
+    
+    st.altair_chart(combined_chart, use_container_width=True)
 
     st.subheader("Détails par heure")
     st.dataframe(analysis_df)
@@ -476,26 +440,16 @@ page = st.sidebar.radio("Choisissez une page", ["Détection Doublons", "Analyse 
 st.sidebar.title("Fichiers de données")
 
 # --- Logique de chargement et d'affichage des pages ---
-if page == "Détection Doublons":
+if page in ["Détection Doublons", "Analyse & Visualisations"]:
     ppr_uploaded_file = st.sidebar.file_uploader("Fichier PPR Détaillé (`Reservations.csv`)", type=['csv'])
     if ppr_uploaded_file is not None:
         st.session_state.ppr_data = load_and_prepare_data(ppr_uploaded_file, 'PPR_DETAIL')
     
     if st.session_state.ppr_data is not None:
-        page_detection_doublons(st.session_state.ppr_data)
+        if page == "Détection Doublons": page_detection_doublons(st.session_state.ppr_data)
+        elif page == "Analyse & Visualisations": page_analyse_visuelle(st.session_state.ppr_data)
     else:
         st.info("Veuillez charger un fichier PPR détaillé. [Lien pour récupérer le fichier](https://ppr.gva.ch/Reservations/Index).")
-
-elif page == "Analyse & Visualisations":
-    vis_uploaded_file = st.sidebar.file_uploader("Fichier PPR Riche (`PBI_PPR_EPL.xlsx`)", type=['xlsx', 'xls'], key="ppr_rich_vis")
-    if vis_uploaded_file is not None:
-        st.session_state.vis_data = load_and_prepare_data(vis_uploaded_file, 'PPR_RICH')
-    
-    if st.session_state.vis_data is not None:
-        page_analyse_visuelle(st.session_state.vis_data)
-    else:
-        st.info("Veuillez charger un fichier PPR riche (format PBI_PPR_EPL) pour les visualisations.")
-
 
 elif page == "Analyse de Saturation Piste":
     saturation_file = st.sidebar.file_uploader("Fichier Prévisions (PPR+SCR)", type=['xlsx', 'xls'])
