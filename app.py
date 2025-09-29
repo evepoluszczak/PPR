@@ -50,11 +50,6 @@ def load_and_prepare_data(uploaded_file, file_type):
 
         elif file_type == 'COMBINED': # Pour la saturation et l'analyse post-op
             raw_df = pd.read_excel(uploaded_file)
-            # Adapter aux nouveaux noms de colonnes du fichier de prévision
-            if 'Arrival - Departure Code' in raw_df.columns:
-                 raw_df.rename(columns={'Arrival - Departure Code': 'Arrival - Departure'}, inplace=True)
-                 raw_df['Arrival - Departure'] = raw_df['Arrival - Departure'].map({'A': 'Arrival', 'D': 'Departure'})
-
             required_cols = ['Date', 'Heure_Local_Tab', 'Rotation', 'Nombre de réservations']
             if not all(col in raw_df.columns for col in required_cols):
                 st.error(f"Le fichier combiné (PPR+SCR) semble invalide.")
