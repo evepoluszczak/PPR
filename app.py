@@ -21,9 +21,6 @@ if 'predicted_data' not in st.session_state:
     st.session_state.predicted_data = None
 if 'actual_data' not in st.session_state:
     st.session_state.actual_data = None
-if 'historical_data' not in st.session_state:
-    st.session_state.historical_data = None
-
 
 # --- Fichiers de données statiques ---
 CAPACITIES_FILE = 'capacities.xlsx'
@@ -34,11 +31,11 @@ CAPACITIES_FILE = 'capacities.xlsx'
 def load_and_prepare_data(uploaded_file, file_type):
     """Charge, lit et normalise les données des différents types de fichiers."""
     try:
-        if file_type == 'PPR_DETAIL': # Fichier simple pour l'analyse du jour
+        if file_type == 'PPR_DETAIL': # Pour la détection de doublons
             raw_df = pd.read_csv(uploaded_file, sep=';', encoding='latin-1')
             required_cols = ['Id', 'Date', 'CallSign', 'Registration', 'MovementTypeId', 'Deleted']
             if not all(col in raw_df.columns for col in required_cols):
-                st.error(f"Le fichier PPR détaillé (Reservations.csv) semble invalide.")
+                st.error(f"Le fichier PPR détaillé semble invalide.")
                 return None
             raw_df = raw_df.rename(columns={'CallSign': 'Call sign', 'Registration': 'Immatriculation'})
             datetime_col = pd.to_datetime(raw_df['Date'], errors='coerce', dayfirst=True)
@@ -49,32 +46,20 @@ def load_and_prepare_data(uploaded_file, file_type):
             raw_df.loc[raw_df['Deleted'] == True, 'Login (Suppression)'] = 'Deleted'
             movement_map = {True: 'Arrival', False: 'Departure'}
             raw_df['Type de mouvement'] = raw_df['MovementTypeId'].map(movement_map)
-            return raw_df
 
-        elif file_type == 'PPR_HISTORICAL': # Nouveau fichier riche pour l'analyse historique
-            raw_df = pd.read_excel(uploaded_file, skiprows=1)
-            raw_df = raw_df.rename(columns={
-                'Slot Réservation.Date': 'Slot.Date',
-                'Heure': 'Slot.Hour',
-            })
-            required_cols = ['Slot.Date', 'Slot.Hour', 'Login (Suppression)', 'PPR utilisée', 'Date et heure d\'effacement', 'Login', 'Type d\'aéronef']
-            if not all(col in raw_df.columns for col in required_cols):
-                st.error(f"Le fichier historique semble invalide.")
-                return None
-            return raw_df
-            
         elif file_type == 'COMBINED': # Pour la saturation et l'analyse post-op
             raw_df = pd.read_excel(uploaded_file)
             required_cols = ['Date', 'Heure_Local_Tab', 'Rotation', 'Nombre de réservations']
             if not all(col in raw_df.columns for col in required_cols):
-                st.error(f"Le fichier combiné (PPR+SCR) semble invalile.")
+                st.error(f"Le fichier combiné (PPR+SCR) semble invalide.")
                 return None
             raw_df['Slot.Date'] = pd.to_datetime(raw_df['Date'], errors='coerce').dt.date
             raw_df['Heure'] = raw_df['Heure_Local_Tab'].str.split('h').str[0].astype(int)
+            # Renommer pour clarté
             raw_df.rename(columns={'Rotation': 'Vols SCR', 'Nombre de réservations': 'Vols PPR'}, inplace=True)
-            raw_df['Vols PPR'] = raw_df['Vols PPR'].fillna(0).astype(int)
-            return raw_df
+            raw_df['Vols PPR'] = raw_df['Vols PPR'].fillna(0).astype(int) # Gérer les cas où il n'y a pas de PPR
 
+        return raw_df
     except Exception as e:
         st.error(f"Erreur lors de la lecture du fichier {file_type}: {e}")
         return None
@@ -376,97 +361,16 @@ def page_post_operationnelle():
         )
         st.altair_chart(chart, use_container_width=True)
 
-def page_analyse_historique(df):
-    """Affiche la page d'analyse historique des PPR."""
-    st.title("📈 Analyse Historique des PPR")
-    st.markdown("Explorez les tendances du trafic, des acteurs et des annulations sur la base des données passées.")
-
-    # Data preparation
-    df_copy = df.copy()
-    # Convertir les dates et heures en format datetime
-    df_copy['Slot.Date'] = pd.to_datetime(df_copy['Slot.Date'], errors='coerce')
-    df_copy['Slot.Hour'] = df_copy['Slot.Hour'].astype(str) # Assurer que c'est une chaîne
-    df_copy['datetime'] = pd.to_datetime(df_copy['Slot.Date'].dt.strftime('%Y-%m-%d') + ' ' + df_copy['Slot.Hour'], errors='coerce')
-
-    df_copy['Mois'] = df_copy['datetime'].dt.to_period('M').astype(str)
-    df_copy['JourSemaine'] = df_copy['datetime'].dt.day_name()
-    df_copy['Heure'] = df_copy['datetime'].dt.hour
-    
-    # Définir les vols annulés
-    df_copy['Annulé'] = df_copy['Login (Suppression)'].notna()
-    
-    df_active = df_copy[~df_copy['Annulé']]
-
-    # --- Section 1: Fiabilité Opérationnelle ---
-    st.header("Fiabilité Opérationnelle")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.subheader("Analyse des No-Shows")
-        no_shows = df_active[df_active['PPR utilisée'] == 'Non']
-        no_show_count = len(no_shows)
-        active_count = len(df_active)
-        no_show_rate = (no_show_count / active_count) * 100 if active_count > 0 else 0
-        st.metric("Nombre de No-Shows", no_show_count)
-        st.metric("Taux de No-Show sur vols actifs", f"{no_show_rate:.2f}%")
-
-    with col2:
-        st.subheader("Analyse des Annulations Tardives")
-        cancelled_df = df_copy[df_copy['Annulé']].copy()
-        cancelled_df['Date et heure d\'effacement'] = pd.to_datetime(cancelled_df['Date et heure d\'effacement'], errors='coerce')
-        cancelled_df['Préavis (heures)'] = (cancelled_df['datetime'] - cancelled_df['Date et heure d\'effacement']).dt.total_seconds() / 3600
-        
-        bins = [-np.inf, 24, 48, 72, np.inf]
-        labels = ["< 24h", "24h-48h", "48h-72h", "> 72h"]
-        cancelled_df['Catégorie Préavis'] = pd.cut(cancelled_df['Préavis (heures)'], bins=bins, labels=labels, right=False)
-        
-        cancellation_timing_counts = cancelled_df['Catégorie Préavis'].value_counts().reindex(labels)
-        st.bar_chart(cancellation_timing_counts)
-
-
-    # --- Section 2: Analyse Temporelle ---
-    st.header("Analyse de la Demande Temporelle")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        st.subheader("Vols par Mois")
-        monthly_traffic = df_active.groupby('Mois').size().reset_index(name='Nombre de Vols')
-        st.bar_chart(monthly_traffic.set_index('Mois'))
-
-    with col2:
-        st.subheader("Vols par Jour de la Semaine")
-        days_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-        daily_traffic = df_active['JourSemaine'].value_counts().reindex(days_order)
-        st.bar_chart(daily_traffic)
-
-    # --- Section 3: Analyse des Acteurs ---
-    st.header("Analyse des Acteurs du Marché")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        st.subheader("Top 10 Agents de Handling")
-        top_agents = df_active['Handling Agent'].value_counts().nlargest(10)
-        st.bar_chart(top_agents)
-    with col2:
-        st.subheader("Top 10 Clients (par Login)")
-        top_clients = df_active['Login'].value_counts().nlargest(10)
-        st.bar_chart(top_clients)
-
-    # --- Section 4: Analyse de la Flotte ---
-    st.header("Analyse de la Flotte")
-    st.subheader("Top 10 Types d'Aéronefs")
-    top_aircraft = df_active['Type d\'aéronef'].value_counts().nlargest(10)
-    st.bar_chart(top_aircraft)
-
 
 # --- Interface principale de l'application ---
 st.sidebar.title("Navigation")
-page = st.sidebar.radio("Choisissez une page", ["Détection Doublons", "Analyse & Visualisations", "Analyse de Saturation Piste", "Analyse Post-Opérationnelle", "Analyse Historique"])
+page = st.sidebar.radio("Choisissez une page", ["Détection Doublons", "Analyse & Visualisations", "Analyse de Saturation Piste", "Analyse Post-Opérationnelle"])
 
 st.sidebar.title("Fichiers de données")
 
 # --- Logique de chargement et d'affichage des pages ---
 if page in ["Détection Doublons", "Analyse & Visualisations"]:
-    ppr_uploaded_file = st.sidebar.file_uploader("Fichier PPR Détaillé (`Reservations.csv`)", type=['csv'], key="ppr_detail_daily")
+    ppr_uploaded_file = st.sidebar.file_uploader("Fichier PPR Détaillé (`Reservations.csv`)", type=['csv'])
     if ppr_uploaded_file is not None:
         st.session_state.ppr_data = load_and_prepare_data(ppr_uploaded_file, 'PPR_DETAIL')
     
@@ -488,14 +392,3 @@ elif page == "Analyse de Saturation Piste":
 
 elif page == "Analyse Post-Opérationnelle":
     page_post_operationnelle()
-
-elif page == "Analyse Historique":
-    historical_file = st.sidebar.file_uploader("Fichier Historique PPR", type=['xlsx', 'xls'], key="ppr_historical")
-    if historical_file is not None:
-        st.session_state.historical_data = load_and_prepare_data(historical_file, 'PPR_HISTORICAL')
-    
-    if st.session_state.historical_data is not None:
-        page_analyse_historique(st.session_state.historical_data)
-    else:
-        st.info("Veuillez charger le fichier historique des réservations PPR .")
-
