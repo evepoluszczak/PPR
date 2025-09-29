@@ -52,7 +52,7 @@ def load_and_prepare_data(uploaded_file, file_type):
             return raw_df
 
         elif file_type == 'PPR_HISTORICAL': # Nouveau fichier riche pour l'analyse historique
-            raw_df = pd.read_csv(uploaded_file, sep=',', encoding='latin-1', skiprows=1)
+            raw_df = pd.read_excel(uploaded_file, skiprows=1)
             raw_df = raw_df.rename(columns={
                 'Slot Réservation.Date': 'Slot.Date',
                 'Heure': 'Slot.Hour',
