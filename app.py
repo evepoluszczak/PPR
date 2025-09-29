@@ -175,48 +175,47 @@ def page_detection_doublons(df):
                     with st.expander(f"Mail pour {login}"):
                         user_anomalies = summary_df[summary_df['OwnerProfileLogin'] == login]
                         
-                        # --- French part ---
-                        mail_body_lines_fr = [
-                            "Bonjour,",
-                            "\nNous avons remarqué les doublons suivants sous votre compte PPR :\n",
-                        ]
-                        
-                        table_lines = []
-                        # Markdown table header
-                        table_lines.append("| Date | Immatriculation | CallSign | Slot 1 | Slot 2 | Motif |")
-                        table_lines.append("|:---|:---|:---|:---|:---|:---|")
-                        
+                        anomaly_lines_fr = []
+                        anomaly_lines_en = []
+
                         for index, row in user_anomalies.iterrows():
-                            movement_translation = {'Arrival': 'Arrivée', 'Departure': 'Départ'}
-                            translated_movement = movement_translation.get(row['Type de mouvement'], row['Type de mouvement'])
-                            reason = "Horaires identiques" if row['Check'] == 'Erreur' else f"Deux '{translated_movement}' consécutifs"
+                            # French details
+                            movement_translation_fr = {'Arrival': 'Arrivée', 'Departure': 'Départ'}
+                            translated_movement_fr = movement_translation_fr.get(row['Type de mouvement'], row['Type de mouvement'])
+                            reason_fr = "Horaires identiques" if row['Check'] == 'Erreur' else f"Deux '{translated_movement_fr}' consécutifs"
+                            
+                            # English details
+                            reason_en = "Identical times" if row['Check'] == 'Erreur' else f"Two consecutive {row['Type de mouvement']}s"
+                            
                             flight_date = row['Slot.Date'].strftime('%d/%m/%Y')
                             slot1 = row['Slot.Hour'].strftime('%H:%M') if pd.notna(row['Slot.Hour']) else 'N/A'
                             slot2 = row['Next_Slot.Hour'].strftime('%H:%M') if pd.notna(row['Next_Slot.Hour']) else 'N/A'
                             immat = str(row['Immatriculation'])
                             callsign = str(row.get('Call sign', 'N/A'))
                             
-                            table_lines.append(f"| {flight_date} | {immat} | {callsign} | {slot1} | {slot2} | {reason} |")
+                            anomaly_lines_fr.append(f"  - Vol du {flight_date} ({immat} / {callsign}), slots {slot1} & {slot2}. Motif : {reason_fr}")
+                            anomaly_lines_en.append(f"  - Flight on {flight_date} ({immat} / {callsign}), slots {slot1} & {slot2}. Reason: {reason_en}")
 
-                        mail_body_lines_fr.extend(table_lines)
-                        mail_body_lines_fr.extend([
+                        # --- French part ---
+                        mail_body_fr = [
+                            "Bonjour,",
+                            "\nNous avons remarqué les doublons suivants sous votre compte PPR :\n",
+                            *anomaly_lines_fr,
                             "\nNous vous remercions de bien vouloir vérifier ces PPR pour une mise en conformité de la capacité réservée.",
-                            "\nCordiales salutations,"
-                        ])
-
+                            "Cordiales salutations,"
+                        ]
+                        
                         # --- English part ---
-                        mail_body_lines_en = [
+                        mail_body_en = [
                             "\n\n______\n\n",
                             "Hello,",
-                            "\nWe have noticed the following duplicates under your PPR account:\n"
-                        ]
-                        mail_body_lines_en.extend(table_lines) # Reuse the same table
-                        mail_body_lines_en.extend([
+                            "\nWe have noticed the following duplicates under your PPR account:\n",
+                            *anomaly_lines_en,
                             "\nWe would be grateful if you could check these PPRs to ensure that the booked capacity is correct.",
-                            "\nBest regards,"
-                        ])
+                            "Best regards,"
+                        ]
 
-                        full_mail_text = "\n".join(mail_body_lines_fr + mail_body_lines_en)
+                        full_mail_text = "\n".join(mail_body_fr + mail_body_en)
                         st.text_area("Texte à copier :", full_mail_text, height=400, key=f"mail_{login.replace('.', '_')}")
             else:
                 st.write("Aucun login associé aux anomalies.")
