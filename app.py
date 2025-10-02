@@ -89,8 +89,14 @@ def process_ppr_data(df, analysis_dates):
 
         if duplicates.empty: return pd.DataFrame()
         duplicates.sort_values(by=group_cols + ['Slot.Hour'], inplace=True)
+        
+        # --- Modifications ici ---
         duplicates['Next_Slot.Hour'] = duplicates.groupby(group_cols)['Slot.Hour'].shift(-1)
         duplicates['Next_Type de mouvement'] = duplicates.groupby(group_cols)['Type de mouvement'].shift(-1)
+        # Ajout de la récupération du Callsign suivant
+        duplicates['Next_Call_sign'] = duplicates.groupby(group_cols)['Call sign'].shift(-1) 
+        # --- Fin des modifications ---
+
         is_double = (duplicates['Type de mouvement'] == duplicates['Next_Type de mouvement']) & duplicates['Next_Type de mouvement'].notna()
         is_error = (duplicates['Slot.Hour'] == duplicates['Next_Slot.Hour']) & duplicates['Next_Slot.Hour'].notna()
         duplicates['Check'] = ''
@@ -154,8 +160,21 @@ def page_detection_doublons(df):
     if num_anomalies > 0:
         st.success(f"**{num_anomalies}** anomalie(s) détectée(s) !")
         summary_df = result_df[result_df['Check'] != ''].copy()
-        display_df = summary_df.rename(columns={'Slot.Date': 'Date du vol', 'Call sign': 'CallSign', 'Slot.Hour': 'Slot 1', 'Next_Slot.Hour': 'Slot 2', 'Type de mouvement': 'MovementType', 'OwnerProfileLogin': 'Login'})
-        display_cols = ['Date du vol', 'Immatriculation', 'CallSign', 'Slot 1', 'Slot 2', 'MovementType', 'Login']
+        
+        # --- Modification 1 : Renommer la nouvelle colonne ---
+        display_df = summary_df.rename(columns={
+            'Slot.Date': 'Date du vol', 
+            'Call sign': 'CallSign 1', 
+            'Next_Call_sign': 'CallSign 2', # Ajout du renommage
+            'Slot.Hour': 'Slot 1', 
+            'Next_Slot.Hour': 'Slot 2', 
+            'Type de mouvement': 'MovementType', 
+            'OwnerProfileLogin': 'Login'
+        })
+        
+        # --- Modification 2 : Ajouter la colonne à la liste d'affichage ---
+        display_cols = ['Date du vol', 'Immatriculation', 'CallSign 1', 'CallSign 2', 'Slot 1', 'Slot 2', 'MovementType', 'Login']
+        
         display_cols_exist = [col for col in display_cols if col in display_df.columns]
         def highlight_same_slot(row):
             if pd.notna(row['Slot 1']) and pd.notna(row['Slot 2']) and row['Slot 1'] == row['Slot 2']:
@@ -166,6 +185,7 @@ def page_detection_doublons(df):
         st.download_button(label="📥 Télécharger les résultats CSV", data=result_df.to_csv(index=False, sep=';').encode('utf-8'), file_name=f"ppr_doublons_details_{date.today()}.csv", mime="text/csv")
     else:
         st.success("🎉 Aucune anomalie détectée.")
+        
     st.header("📧 Générer les mails de correction")
     if st.button("Générer le texte pour chaque utilisateur"):
         if num_anomalies > 0 and not summary_df.empty:
@@ -179,6 +199,14 @@ def page_detection_doublons(df):
                         anomaly_lines_en = []
 
                         for index, row in user_anomalies.iterrows():
+                            # --- Modification 3 : Récupérer Callsign2 et l'inclure dans les emails ---
+                            flight_date = row['Slot.Date'].strftime('%d/%m/%Y')
+                            slot1 = row['Slot.Hour'].strftime('%H:%M') if pd.notna(row['Slot.Hour']) else 'N/A'
+                            slot2 = row['Next_Slot.Hour'].strftime('%H:%M') if pd.notna(row['Next_Slot.Hour']) else 'N/A'
+                            immat = str(row['Immatriculation'])
+                            callsign1 = str(row.get('Call sign', 'N/A'))
+                            callsign2 = str(row.get('Next_Call_sign', 'N/A')) # Récupérer le Callsign 2
+
                             # French details
                             movement_translation_fr = {'Arrival': 'Arrivée', 'Departure': 'Départ'}
                             translated_movement_fr = movement_translation_fr.get(row['Type de mouvement'], row['Type de mouvement'])
@@ -187,16 +215,11 @@ def page_detection_doublons(df):
                             # English details
                             reason_en = "Identical times" if row['Check'] == 'Erreur' else f"Two consecutive {row['Type de mouvement']}s"
                             
-                            flight_date = row['Slot.Date'].strftime('%d/%m/%Y')
-                            slot1 = row['Slot.Hour'].strftime('%H:%M') if pd.notna(row['Slot.Hour']) else 'N/A'
-                            slot2 = row['Next_Slot.Hour'].strftime('%H:%M') if pd.notna(row['Next_Slot.Hour']) else 'N/A'
-                            immat = str(row['Immatriculation'])
-                            callsign = str(row.get('Call sign', 'N/A'))
-                            
-                            anomaly_lines_fr.append(f"  - Vol du {flight_date} ({immat} / {callsign}), slots {slot1} & {slot2}. Motif : {reason_fr}")
-                            anomaly_lines_en.append(f"  - Flight on {flight_date} ({immat} / {callsign}), slots {slot1} & {slot2}. Reason: {reason_en}")
+                            # Mettre à jour le format des lignes d'anomalie
+                            anomaly_lines_fr.append(f"  - Vol du {flight_date} ({immat} / {callsign1} & {callsign2}), slots {slot1} & {slot2}. Motif : {reason_fr}")
+                            anomaly_lines_en.append(f"  - Flight on {flight_date} ({immat} / {callsign1} & {callsign2}), slots {slot1} & {slot2}. Reason: {reason_en}")
 
-                        # --- French part ---
+                        # --- Le reste de la génération de mail est inchangé ---
                         mail_body_fr = [
                             "Bonjour,",
                             "\nNous avons remarqué les doublons suivants sous votre compte PPR :\n",
@@ -205,7 +228,6 @@ def page_detection_doublons(df):
                             "Cordiales salutations,"
                         ]
                         
-                        # --- English part ---
                         mail_body_en = [
                             "\n\n______\n\n",
                             "Hello,",
@@ -221,6 +243,7 @@ def page_detection_doublons(df):
                 st.write("Aucun login associé aux anomalies.")
         else:
             st.info("Aucune anomalie à signaler.")
+            
     st.header("📋 Liste des PPR Actifs")
     active_ppr_filtered_days = active_ppr_full[active_ppr_full['Slot.Date'].isin(analysis_dates)].copy()
     active_ppr_filtered_days.sort_values(by=['Slot.Date', 'Immatriculation', 'Slot.Hour'], inplace=True)
