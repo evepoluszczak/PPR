@@ -33,9 +33,10 @@ def load_and_prepare_data(uploaded_file, file_type):
     try:
         if file_type == 'PPR_DETAIL': # Pour la détection de doublons
             raw_df = pd.read_csv(uploaded_file, sep=';', encoding='latin-1')
-            required_cols = ['Id', 'Date', 'CallSign', 'Registration', 'MovementTypeId', 'Deleted']
+            ### CORRECTION 1 : Remplacer 'Id' par 'ReservationNumber' dans les colonnes requises ###
+            required_cols = ['ReservationNumber', 'Date', 'CallSign', 'Registration', 'MovementTypeId', 'Deleted']
             if not all(col in raw_df.columns for col in required_cols):
-                st.error(f"Le fichier PPR détaillé semble invalide.")
+                st.error(f"Le fichier PPR détaillé semble invalide. Assurez-vous qu'il contienne les colonnes nécessaires, notamment 'ReservationNumber'.")
                 return None
             raw_df = raw_df.rename(columns={'CallSign': 'Call sign', 'Registration': 'Immatriculation'})
             datetime_col = pd.to_datetime(raw_df['Date'], errors='coerce', dayfirst=True)
@@ -94,8 +95,8 @@ def process_ppr_data(df, analysis_dates):
         duplicates['Next_Slot.Hour'] = duplicates.groupby(group_cols)['Slot.Hour'].shift(-1)
         duplicates['Next_Type de mouvement'] = duplicates.groupby(group_cols)['Type de mouvement'].shift(-1)
         duplicates['Next_Call_sign'] = duplicates.groupby(group_cols)['Call sign'].shift(-1)
-        ### MODIFICATION 1 : Ajouter la récupération de l'ID de réservation suivant ###
-        duplicates['Next_Id'] = duplicates.groupby(group_cols)['Id'].shift(-1)
+        ### CORRECTION 2 : Utiliser 'ReservationNumber' pour récupérer le numéro de réservation suivant ###
+        duplicates['Next_ReservationNumber'] = duplicates.groupby(group_cols)['ReservationNumber'].shift(-1)
         # --- Fin des modifications ---
 
         is_double = (duplicates['Type de mouvement'] == duplicates['Next_Type de mouvement']) & duplicates['Next_Type de mouvement'].notna()
@@ -197,22 +198,22 @@ def page_detection_doublons(df):
                         anomaly_lines_fr = []
                         anomaly_lines_en = []
 
-                        ### MODIFICATION 2 : Adapter la génération du texte pour les e-mails ###
+                        ### CORRECTION 3 : Adapter la génération du texte pour utiliser ReservationNumber ###
                         for index, row in user_anomalies.iterrows():
                             flight_date = row['Slot.Date'].strftime('%d/%m/%Y')
                             immat = str(row['Immatriculation'])
 
                             # Informations pour le premier vol de la paire
-                            id1 = int(row['Id']) if pd.notna(row['Id']) else 'N/A'
+                            res_num1 = str(row['ReservationNumber']) if pd.notna(row['ReservationNumber']) else 'N/A'
                             callsign1 = str(row.get('Call sign', 'N/A'))
                             
                             # Informations pour le second vol de la paire
-                            id2 = int(row['Next_Id']) if pd.notna(row['Next_Id']) else 'N/A'
+                            res_num2 = str(row['Next_ReservationNumber']) if pd.notna(row['Next_ReservationNumber']) else 'N/A'
                             callsign2 = str(row.get('Next_Call_sign', 'N/A'))
 
                             # French details
-                            anomaly_lines_fr.append(f"{flight_date} - N° réservation: {id1} - Immatriculation: {immat} - Call sign: {callsign1}")
-                            anomaly_lines_fr.append(f"{flight_date} - N° réservation: {id2} - Immatriculation: {immat} - Call sign: {callsign2}")
+                            anomaly_lines_fr.append(f"{flight_date} - N° réservation: {res_num1} - Immatriculation: {immat} - Call sign: {callsign1}")
+                            anomaly_lines_fr.append(f"{flight_date} - N° réservation: {res_num2} - Immatriculation: {immat} - Call sign: {callsign2}")
                             
                             movement_translation_fr = {'Arrival': 'Arrivée', 'Departure': 'Départ'}
                             translated_movement_fr = movement_translation_fr.get(row['Type de mouvement'], row['Type de mouvement'])
@@ -221,8 +222,8 @@ def page_detection_doublons(df):
                             anomaly_lines_fr.append("") # Ajoute une ligne vide pour séparer les anomalies
 
                             # English details
-                            anomaly_lines_en.append(f"{flight_date} - Reservation n°: {id1} - Registration: {immat} - Call sign: {callsign1}")
-                            anomaly_lines_en.append(f"{flight_date} - Reservation n°: {id2} - Registration: {immat} - Call sign: {callsign2}")
+                            anomaly_lines_en.append(f"{flight_date} - Reservation n°: {res_num1} - Registration: {immat} - Call sign: {callsign1}")
+                            anomaly_lines_en.append(f"{flight_date} - Reservation n°: {res_num2} - Registration: {immat} - Call sign: {callsign2}")
 
                             reason_en = "Reason: Identical times" if row['Check'] == 'Erreur' else f"Reason: Two consecutive {row['Type de mouvement']}s"
                             anomaly_lines_en.append(reason_en)
