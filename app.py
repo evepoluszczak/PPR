@@ -52,8 +52,8 @@ def load_and_prepare_data(uploaded_file, file_type):
             raw_df = pd.read_excel(uploaded_file)
             # Adapter aux nouveaux noms de colonnes du fichier de prévision
             if 'Arrival - Departure Code' in raw_df.columns:
-                 raw_df.rename(columns={'Arrival - Departure Code': 'Arrival - Departure'}, inplace=True)
-                 raw_df['Arrival - Departure'] = raw_df['Arrival - Departure'].map({'A': 'Arrival', 'D': 'Departure'})
+                raw_df.rename(columns={'Arrival - Departure Code': 'Arrival - Departure'}, inplace=True)
+                raw_df['Arrival - Departure'] = raw_df['Arrival - Departure'].map({'A': 'Arrival', 'D': 'Departure'})
 
             required_cols = ['Date', 'Heure_Local_Tab', 'Rotation', 'Nombre de réservations']
             if not all(col in raw_df.columns for col in required_cols):
@@ -93,8 +93,9 @@ def process_ppr_data(df, analysis_dates):
         # --- Modifications ici ---
         duplicates['Next_Slot.Hour'] = duplicates.groupby(group_cols)['Slot.Hour'].shift(-1)
         duplicates['Next_Type de mouvement'] = duplicates.groupby(group_cols)['Type de mouvement'].shift(-1)
-        # Ajout de la récupération du Callsign suivant
-        duplicates['Next_Call_sign'] = duplicates.groupby(group_cols)['Call sign'].shift(-1) 
+        duplicates['Next_Call_sign'] = duplicates.groupby(group_cols)['Call sign'].shift(-1)
+        ### MODIFICATION 1 : Ajouter la récupération de l'ID de réservation suivant ###
+        duplicates['Next_Id'] = duplicates.groupby(group_cols)['Id'].shift(-1)
         # --- Fin des modifications ---
 
         is_double = (duplicates['Type de mouvement'] == duplicates['Next_Type de mouvement']) & duplicates['Next_Type de mouvement'].notna()
@@ -161,18 +162,16 @@ def page_detection_doublons(df):
         st.success(f"**{num_anomalies}** anomalie(s) détectée(s) !")
         summary_df = result_df[result_df['Check'] != ''].copy()
         
-        # --- Modification 1 : Renommer la nouvelle colonne ---
         display_df = summary_df.rename(columns={
             'Slot.Date': 'Date du vol', 
             'Call sign': 'CallSign 1', 
-            'Next_Call_sign': 'CallSign 2', # Ajout du renommage
+            'Next_Call_sign': 'CallSign 2',
             'Slot.Hour': 'Slot 1', 
             'Next_Slot.Hour': 'Slot 2', 
             'Type de mouvement': 'MovementType', 
             'OwnerProfileLogin': 'Login'
         })
         
-        # --- Modification 2 : Ajouter la colonne à la liste d'affichage ---
         display_cols = ['Date du vol', 'Immatriculation', 'CallSign 1', 'CallSign 2', 'Slot 1', 'Slot 2', 'MovementType', 'Login']
         
         display_cols_exist = [col for col in display_cols if col in display_df.columns]
@@ -198,27 +197,37 @@ def page_detection_doublons(df):
                         anomaly_lines_fr = []
                         anomaly_lines_en = []
 
+                        ### MODIFICATION 2 : Adapter la génération du texte pour les e-mails ###
                         for index, row in user_anomalies.iterrows():
-                            # --- Modification 3 : Récupérer Callsign2 et l'inclure dans les emails ---
                             flight_date = row['Slot.Date'].strftime('%d/%m/%Y')
-                            slot1 = row['Slot.Hour'].strftime('%H:%M') if pd.notna(row['Slot.Hour']) else 'N/A'
-                            slot2 = row['Next_Slot.Hour'].strftime('%H:%M') if pd.notna(row['Next_Slot.Hour']) else 'N/A'
                             immat = str(row['Immatriculation'])
+
+                            # Informations pour le premier vol de la paire
+                            id1 = int(row['Id']) if pd.notna(row['Id']) else 'N/A'
                             callsign1 = str(row.get('Call sign', 'N/A'))
-                            callsign2 = str(row.get('Next_Call_sign', 'N/A')) # Récupérer le Callsign 2
+                            
+                            # Informations pour le second vol de la paire
+                            id2 = int(row['Next_Id']) if pd.notna(row['Next_Id']) else 'N/A'
+                            callsign2 = str(row.get('Next_Call_sign', 'N/A'))
 
                             # French details
+                            anomaly_lines_fr.append(f"{flight_date} - N° réservation: {id1} - Immatriculation: {immat} - Call sign: {callsign1}")
+                            anomaly_lines_fr.append(f"{flight_date} - N° réservation: {id2} - Immatriculation: {immat} - Call sign: {callsign2}")
+                            
                             movement_translation_fr = {'Arrival': 'Arrivée', 'Departure': 'Départ'}
                             translated_movement_fr = movement_translation_fr.get(row['Type de mouvement'], row['Type de mouvement'])
-                            reason_fr = "Horaires identiques" if row['Check'] == 'Erreur' else f"Deux '{translated_movement_fr}' consécutifs"
-                            
-                            # English details
-                            reason_en = "Identical times" if row['Check'] == 'Erreur' else f"Two consecutive {row['Type de mouvement']}s"
-                            
-                            # Mettre à jour le format des lignes d'anomalie
-                            anomaly_lines_fr.append(f"  - Vol du {flight_date} ({immat} / {callsign1} & {callsign2}), slots {slot1} & {slot2}. Motif : {reason_fr}")
-                            anomaly_lines_en.append(f"  - Flight on {flight_date} ({immat} / {callsign1} & {callsign2}), slots {slot1} & {slot2}. Reason: {reason_en}")
+                            reason_fr = "Motif: Horaires identiques" if row['Check'] == 'Erreur' else f"Motif: Deux '{translated_movement_fr}' consécutifs"
+                            anomaly_lines_fr.append(reason_fr)
+                            anomaly_lines_fr.append("") # Ajoute une ligne vide pour séparer les anomalies
 
+                            # English details
+                            anomaly_lines_en.append(f"{flight_date} - Reservation n°: {id1} - Registration: {immat} - Call sign: {callsign1}")
+                            anomaly_lines_en.append(f"{flight_date} - Reservation n°: {id2} - Registration: {immat} - Call sign: {callsign2}")
+
+                            reason_en = "Reason: Identical times" if row['Check'] == 'Erreur' else f"Reason: Two consecutive {row['Type de mouvement']}s"
+                            anomaly_lines_en.append(reason_en)
+                            anomaly_lines_en.append("") # Ajoute une ligne vide pour séparer les anomalies
+                        
                         # --- Le reste de la génération de mail est inchangé ---
                         mail_body_fr = [
                             "Bonjour,",
@@ -533,4 +542,3 @@ elif page == "Analyse de Saturation Piste":
 
 elif page == "Analyse Post-Opérationnelle":
     page_post_operationnelle()
-
