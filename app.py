@@ -203,10 +203,10 @@ def page_detection_doublons(df):
                             callsign2 = str(row.get('Next_Call_sign', 'N/A'))
                             slot2 = row['Next_Slot.Hour'].strftime('%H:%M') if pd.notna(row['Next_Slot.Hour']) else 'N/A'
 
-                            ### AJOUT HEURE SLOT ###
+                            ### FORMATAGE DATE/HEURE ###
                             # French details
-                            anomaly_lines_fr.append(f"{flight_date} - N° réservation: {res_num1} - Immatriculation: {immat} - Call sign: {callsign1} - Slot: {slot1}")
-                            anomaly_lines_fr.append(f"{flight_date} - N° réservation: {res_num2} - Immatriculation: {immat} - Call sign: {callsign2} - Slot: {slot2}")
+                            anomaly_lines_fr.append(f"{flight_date} {slot1} - N° réservation: {res_num1} - Immatriculation: {immat} - Call sign: {callsign1}")
+                            anomaly_lines_fr.append(f"{flight_date} {slot2} - N° réservation: {res_num2} - Immatriculation: {immat} - Call sign: {callsign2}")
                             
                             movement_translation_fr = {'Arrival': 'Arrivée', 'Departure': 'Départ'}
                             translated_movement_fr = movement_translation_fr.get(row['Type de mouvement'], row['Type de mouvement'])
@@ -214,10 +214,10 @@ def page_detection_doublons(df):
                             anomaly_lines_fr.append(reason_fr)
                             anomaly_lines_fr.append("") 
 
-                            ### AJOUT HEURE SLOT ###
+                            ### FORMATAGE DATE/HEURE ###
                             # English details
-                            anomaly_lines_en.append(f"{flight_date} - Reservation n°: {res_num1} - Registration: {immat} - Call sign: {callsign1} - Slot: {slot1}")
-                            anomaly_lines_en.append(f"{flight_date} - Reservation n°: {res_num2} - Registration: {immat} - Call sign: {callsign2} - Slot: {slot2}")
+                            anomaly_lines_en.append(f"{flight_date} {slot1} - Reservation n°: {res_num1} - Registration: {immat} - Call sign: {callsign1}")
+                            anomaly_lines_en.append(f"{flight_date} {slot2} - Reservation n°: {res_num2} - Registration: {immat} - Call sign: {callsign2}")
 
                             reason_en = "Reason: Identical times" if row['Check'] == 'Erreur' else f"Reason: Two consecutive {row['Type de mouvement']}s"
                             anomaly_lines_en.append(reason_en)
