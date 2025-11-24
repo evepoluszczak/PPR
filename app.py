@@ -21,8 +21,6 @@ if 'predicted_data' not in st.session_state:
     st.session_state.predicted_data = None
 if 'actual_data' not in st.session_state:
     st.session_state.actual_data = None
-if 'vis_data' not in st.session_state:
-    st.session_state.vis_data = None
 
 # --- Fichiers de données statiques ---
 CAPACITIES_FILE = 'capacities.xlsx'
@@ -48,22 +46,6 @@ def load_and_prepare_data(uploaded_file, file_type):
             raw_df.loc[raw_df['Deleted'] == True, 'Login (Suppression)'] = 'Deleted'
             movement_map = {True: 'Arrival', False: 'Departure'}
             raw_df['Type de mouvement'] = raw_df['MovementTypeId'].map(movement_map)
-            return raw_df
-        
-        elif file_type == 'PPR_RICH': # Fichier riche pour les visualisations
-            raw_df = pd.read_excel(uploaded_file, skiprows=1)
-            raw_df = raw_df.rename(columns={
-                'Slot Réservation.Date': 'Slot.Date',
-                'Heure': 'Slot.Hour',
-            })
-            required_cols = ['Slot.Date', 'Slot.Hour', 'Login (Suppression)', 'Call sign', 'Type de client', 'Type de profil']
-            if not all(col in raw_df.columns for col in required_cols):
-                st.error(f"Le fichier PPR riche (PBI_PPR_EPL) semble invalide.")
-                return None
-            raw_df['Slot.Date'] = pd.to_datetime(raw_df['Slot.Date'], errors='coerce').dt.date
-            # Gestion robuste de la conversion de l'heure
-            raw_df['Slot.Hour'] = pd.to_datetime(raw_df['Slot.Hour'].astype(str), errors='coerce', format='%H:%M:%S').dt.time
-
             return raw_df
 
         elif file_type == 'COMBINED': # Pour la saturation et l'analyse post-op
@@ -153,45 +135,103 @@ def page_detection_doublons(df):
     ppr_day2_count = 0
     if len(analysis_dates) > 1:
         ppr_day2_count = active_ppr_full[active_ppr_full['Slot.Date'] == analysis_dates[1]].shape[0]
+    else:
+        ppr_day2_count = 0
 
     result_df = process_ppr_data(df, analysis_dates)
+    
+    # Initialisation
+    summary_df_final = pd.DataFrame()
     num_anomalies = 0
+
     if not result_df.empty:
-        num_anomalies = result_df[result_df['Check'] != ''].shape[0]
+        initial_anomalies_df = result_df[result_df['Check'] != ''].copy()
         
+        # --- INTERFACE DE SÉLECTION MANUELLE ---
+        if not initial_anomalies_df.empty:
+            st.markdown("### 🎯 Sélection des anomalies à traiter")
+            st.info("Décochez la case 'Inclure' pour les lignes que vous ne considérez pas comme des anomalies. Elles seront ignorées pour les e-mails et l'export.")
+            
+            # Préparation des données pour l'éditeur
+            editor_df = initial_anomalies_df.copy()
+            editor_df.insert(0, 'Inclure', True) # Colonne de sélection par défaut à True
+            
+            # Configuration de l'affichage de l'éditeur
+            column_config = {
+                "Inclure": st.column_config.CheckboxColumn("Inclure", help="Inclure cette anomalie ?", default=True),
+                "Slot.Date": st.column_config.DateColumn("Date"),
+                "Slot.Hour": st.column_config.TimeColumn("Heure Slot 1", format="HH:mm"),
+                "Next_Slot.Hour": st.column_config.TimeColumn("Heure Slot 2", format="HH:mm"),
+                "Immatriculation": "Immat",
+                "Call sign": "CallSign",
+                "Type de mouvement": "Mouvement",
+                "Check": "Type",
+                "OwnerProfileLogin": "Login"
+            }
+            
+            cols_order = ['Inclure', 'Slot.Date', 'Immatriculation', 'Call sign', 'Slot.Hour', 'Next_Slot.Hour', 'Type de mouvement', 'Check', 'OwnerProfileLogin']
+            
+            edited_df = st.data_editor(
+                editor_df[cols_order],
+                column_config=column_config,
+                disabled=[c for c in cols_order if c != 'Inclure'], # Tout grisé sauf la checkbox
+                hide_index=True,
+                key="anomalies_editor"
+            )
+            
+            # Filtrer les données réelles basées sur la sélection de l'utilisateur
+            # On utilise l'index pour mapper le résultat de l'éditeur aux données d'origine
+            selected_indices = edited_df[edited_df['Inclure']].index
+            summary_df_final = initial_anomalies_df.loc[selected_indices].copy()
+            num_anomalies = len(summary_df_final)
+    
+    # Affichage des KPIs mis à jour
     col1, col2, col3 = st.columns(3)
     col1.metric(f"PPR prévus le {analysis_dates[0].strftime('%d/%m')}", ppr_day1_count)
     if len(analysis_dates) > 1:
         col2.metric(f"PPR prévus le {analysis_dates[1].strftime('%d/%m')}", ppr_day2_count)
     else:
-        col2.metric("PPR prévus J+1", 0) # Placeholder
-    col3.metric("Anomalies détectées", num_anomalies, help="Nombre de paires de vols problématiques.")
+        col2.metric("PPR prévus J+1", 0)
+    col3.metric("Anomalies confirmées", num_anomalies, help="Nombre d'anomalies sélectionnées.")
     
-    st.header("🚨 Analyse des Doublons")
-    summary_df = pd.DataFrame()
+    st.header("🚨 Détail des Anomalies Confirmées")
+    
     if num_anomalies > 0:
-        st.success(f"**{num_anomalies}** anomalie(s) détectée(s) !")
-        summary_df = result_df[result_df['Check'] != ''].copy()
-        display_df = summary_df.rename(columns={'Slot.Date': 'Date du vol', 'Call sign': 'CallSign', 'Slot.Hour': 'Slot 1', 'Next_Slot.Hour': 'Slot 2', 'Type de mouvement': 'MovementType', 'OwnerProfileLogin': 'Login'})
+        st.success(f"**{num_anomalies}** anomalie(s) sélectionnée(s) pour traitement.")
+        
+        # Affichage stylisé (lecture seule) des anomalies retenues
+        display_df = summary_df_final.rename(columns={'Slot.Date': 'Date du vol', 'Call sign': 'CallSign', 'Slot.Hour': 'Slot 1', 'Next_Slot.Hour': 'Slot 2', 'Type de mouvement': 'MovementType', 'OwnerProfileLogin': 'Login'})
         display_cols = ['Date du vol', 'Immatriculation', 'CallSign', 'Slot 1', 'Slot 2', 'MovementType', 'Login']
         display_cols_exist = [col for col in display_cols if col in display_df.columns]
+        
         def highlight_same_slot(row):
             if pd.notna(row['Slot 1']) and pd.notna(row['Slot 2']) and row['Slot 1'] == row['Slot 2']:
                 return ['background-color: #ffcccc'] * len(row.index)
             else:
                 return [''] * len(row.index)
+        
         st.dataframe(display_df[display_cols_exist].style.apply(highlight_same_slot, axis=1))
-        st.download_button(label="📥 Télécharger les résultats CSV", data=result_df.to_csv(index=False, sep=';').encode('utf-8'), file_name=f"ppr_doublons_details_{date.today()}.csv", mime="text/csv")
+        
+        st.download_button(
+            label="📥 Télécharger les anomalies confirmées (CSV)", 
+            data=summary_df_final.to_csv(index=False, sep=';').encode('utf-8'), 
+            file_name=f"ppr_doublons_confirmes_{date.today()}.csv", 
+            mime="text/csv"
+        )
     else:
-        st.success("🎉 Aucune anomalie détectée.")
+        if result_df.empty:
+            st.success("🎉 Aucune anomalie détectée dans les données brutes.")
+        else:
+            st.info("Toutes les anomalies potentielles ont été ignorées manuellement.")
+
     st.header("📧 Générer les mails de correction")
     if st.button("Générer le texte pour chaque utilisateur"):
-        if num_anomalies > 0 and not summary_df.empty:
-            logins_to_notify = summary_df['OwnerProfileLogin'].dropna().unique()
+        if num_anomalies > 0:
+            logins_to_notify = summary_df_final['OwnerProfileLogin'].dropna().unique()
             if len(logins_to_notify) > 0:
                 for login in logins_to_notify:
                     with st.expander(f"Mail pour {login}"):
-                        user_anomalies = summary_df[summary_df['OwnerProfileLogin'] == login]
+                        user_anomalies = summary_df_final[summary_df_final['OwnerProfileLogin'] == login]
                         
                         anomaly_lines_fr = []
                         anomaly_lines_en = []
@@ -241,9 +281,10 @@ def page_detection_doublons(df):
                         full_mail_text = "\n".join(mail_body_fr + mail_body_en)
                         st.text_area("Texte à copier :", full_mail_text, height=400, key=f"mail_{login.replace('.', '_')}")
             else:
-                st.write("Aucun login associé aux anomalies.")
+                st.write("Aucun login associé aux anomalies sélectionnées.")
         else:
-            st.info("Aucune anomalie à signaler.")
+            st.info("Aucune anomalie confirmée à signaler.")
+            
     st.header("📋 Liste des PPR Actifs")
     active_ppr_filtered_days = active_ppr_full[active_ppr_full['Slot.Date'].isin(analysis_dates)].copy()
     active_ppr_filtered_days.sort_values(by=['Slot.Date', 'Immatriculation', 'Slot.Hour'], inplace=True)
