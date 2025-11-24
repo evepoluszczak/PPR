@@ -21,6 +21,8 @@ if 'predicted_data' not in st.session_state:
     st.session_state.predicted_data = None
 if 'actual_data' not in st.session_state:
     st.session_state.actual_data = None
+if 'vis_data' not in st.session_state:
+    st.session_state.vis_data = None
 
 # --- Fichiers de données statiques ---
 CAPACITIES_FILE = 'capacities.xlsx'
@@ -33,9 +35,9 @@ def load_and_prepare_data(uploaded_file, file_type):
     try:
         if file_type == 'PPR_DETAIL': # Pour la détection de doublons
             raw_df = pd.read_csv(uploaded_file, sep=';', encoding='latin-1')
-            required_cols = ['ReservationNumber', 'Date', 'CallSign', 'Registration', 'MovementTypeId', 'Deleted']
+            required_cols = ['Id', 'Date', 'CallSign', 'Registration', 'MovementTypeId', 'Deleted']
             if not all(col in raw_df.columns for col in required_cols):
-                st.error(f"Le fichier PPR détaillé semble invalide. Assurez-vous qu'il contienne les colonnes nécessaires, notamment 'ReservationNumber'.")
+                st.error(f"Le fichier PPR détaillé semble invalide.")
                 return None
             raw_df = raw_df.rename(columns={'CallSign': 'Call sign', 'Registration': 'Immatriculation'})
             datetime_col = pd.to_datetime(raw_df['Date'], errors='coerce', dayfirst=True)
@@ -47,12 +49,29 @@ def load_and_prepare_data(uploaded_file, file_type):
             movement_map = {True: 'Arrival', False: 'Departure'}
             raw_df['Type de mouvement'] = raw_df['MovementTypeId'].map(movement_map)
             return raw_df
+        
+        elif file_type == 'PPR_RICH': # Fichier riche pour les visualisations
+            raw_df = pd.read_excel(uploaded_file, skiprows=1)
+            raw_df = raw_df.rename(columns={
+                'Slot Réservation.Date': 'Slot.Date',
+                'Heure': 'Slot.Hour',
+            })
+            required_cols = ['Slot.Date', 'Slot.Hour', 'Login (Suppression)', 'Call sign', 'Type de client', 'Type de profil']
+            if not all(col in raw_df.columns for col in required_cols):
+                st.error(f"Le fichier PPR riche (PBI_PPR_EPL) semble invalide.")
+                return None
+            raw_df['Slot.Date'] = pd.to_datetime(raw_df['Slot.Date'], errors='coerce').dt.date
+            # Gestion robuste de la conversion de l'heure
+            raw_df['Slot.Hour'] = pd.to_datetime(raw_df['Slot.Hour'].astype(str), errors='coerce', format='%H:%M:%S').dt.time
+
+            return raw_df
 
         elif file_type == 'COMBINED': # Pour la saturation et l'analyse post-op
             raw_df = pd.read_excel(uploaded_file)
+            # Adapter aux nouveaux noms de colonnes du fichier de prévision
             if 'Arrival - Departure Code' in raw_df.columns:
-                raw_df.rename(columns={'Arrival - Departure Code': 'Arrival - Departure'}, inplace=True)
-                raw_df['Arrival - Departure'] = raw_df['Arrival - Departure'].map({'A': 'Arrival', 'D': 'Departure'})
+                 raw_df.rename(columns={'Arrival - Departure Code': 'Arrival - Departure'}, inplace=True)
+                 raw_df['Arrival - Departure'] = raw_df['Arrival - Departure'].map({'A': 'Arrival', 'D': 'Departure'})
 
             required_cols = ['Date', 'Heure_Local_Tab', 'Rotation', 'Nombre de réservations']
             if not all(col in raw_df.columns for col in required_cols):
@@ -60,8 +79,9 @@ def load_and_prepare_data(uploaded_file, file_type):
                 return None
             raw_df['Slot.Date'] = pd.to_datetime(raw_df['Date'], errors='coerce').dt.date
             raw_df['Heure'] = raw_df['Heure_Local_Tab'].str.split('h').str[0].astype(int)
+            # Renommer pour clarté
             raw_df.rename(columns={'Rotation': 'Vols SCR', 'Nombre de réservations': 'Vols PPR'}, inplace=True)
-            raw_df['Vols PPR'] = raw_df['Vols PPR'].fillna(0).astype(int)
+            raw_df['Vols PPR'] = raw_df['Vols PPR'].fillna(0).astype(int) # Gérer les cas où il n'y a pas de PPR
             return raw_df
             
     except Exception as e:
@@ -82,16 +102,13 @@ def process_ppr_data(df, analysis_dates):
         if 'Call sign' in duplicates.columns:
             duplicates = duplicates[duplicates['Call sign'] != 'RWYCHK']
         
+        # Utiliser les dates fournies pour l'analyse
         duplicates = duplicates[duplicates['Slot.Date'].isin(analysis_dates)]
 
         if duplicates.empty: return pd.DataFrame()
         duplicates.sort_values(by=group_cols + ['Slot.Hour'], inplace=True)
-        
         duplicates['Next_Slot.Hour'] = duplicates.groupby(group_cols)['Slot.Hour'].shift(-1)
         duplicates['Next_Type de mouvement'] = duplicates.groupby(group_cols)['Type de mouvement'].shift(-1)
-        duplicates['Next_Call_sign'] = duplicates.groupby(group_cols)['Call sign'].shift(-1)
-        duplicates['Next_ReservationNumber'] = duplicates.groupby(group_cols)['ReservationNumber'].shift(-1)
-
         is_double = (duplicates['Type de mouvement'] == duplicates['Next_Type de mouvement']) & duplicates['Next_Type de mouvement'].notna()
         is_error = (duplicates['Slot.Hour'] == duplicates['Next_Slot.Hour']) & duplicates['Next_Slot.Hour'].notna()
         duplicates['Check'] = ''
@@ -112,14 +129,16 @@ def page_detection_doublons(df):
     active_ppr_full = df[df['Login (Suppression)'].isnull()].copy()
     active_ppr_full['Slot.Date'] = pd.to_datetime(active_ppr_full['Slot.Date']).dt.date
     
+    # Rendre les dates d'analyse dynamiques
     available_dates = sorted(active_ppr_full['Slot.Date'].unique())
     
     if len(available_dates) == 0:
         st.warning("Aucun vol actif trouvé dans le fichier chargé.")
         return
 
-    analysis_dates = available_dates[:2]
+    analysis_dates = available_dates[:2] # Analyser les deux premiers jours trouvés
     
+    # Mettre à jour le sous-titre dynamiquement
     if len(analysis_dates) == 2:
         date1_str = analysis_dates[0].strftime('%d/%m/%Y')
         date2_str = analysis_dates[1].strftime('%d/%m/%Y')
@@ -145,7 +164,7 @@ def page_detection_doublons(df):
     if len(analysis_dates) > 1:
         col2.metric(f"PPR prévus le {analysis_dates[1].strftime('%d/%m')}", ppr_day2_count)
     else:
-        col2.metric("PPR prévus J+1", 0)
+        col2.metric("PPR prévus J+1", 0) # Placeholder
     col3.metric("Anomalies détectées", num_anomalies, help="Nombre de paires de vols problématiques.")
     
     st.header("🚨 Analyse des Doublons")
@@ -153,19 +172,8 @@ def page_detection_doublons(df):
     if num_anomalies > 0:
         st.success(f"**{num_anomalies}** anomalie(s) détectée(s) !")
         summary_df = result_df[result_df['Check'] != ''].copy()
-        
-        display_df = summary_df.rename(columns={
-            'Slot.Date': 'Date du vol', 
-            'Call sign': 'CallSign 1', 
-            'Next_Call_sign': 'CallSign 2',
-            'Slot.Hour': 'Slot 1', 
-            'Next_Slot.Hour': 'Slot 2', 
-            'Type de mouvement': 'MovementType', 
-            'OwnerProfileLogin': 'Login'
-        })
-        
-        display_cols = ['Date du vol', 'Immatriculation', 'CallSign 1', 'CallSign 2', 'Slot 1', 'Slot 2', 'MovementType', 'Login']
-        
+        display_df = summary_df.rename(columns={'Slot.Date': 'Date du vol', 'Call sign': 'CallSign', 'Slot.Hour': 'Slot 1', 'Next_Slot.Hour': 'Slot 2', 'Type de mouvement': 'MovementType', 'OwnerProfileLogin': 'Login'})
+        display_cols = ['Date du vol', 'Immatriculation', 'CallSign', 'Slot 1', 'Slot 2', 'MovementType', 'Login']
         display_cols_exist = [col for col in display_cols if col in display_df.columns]
         def highlight_same_slot(row):
             if pd.notna(row['Slot 1']) and pd.notna(row['Slot 2']) and row['Slot 1'] == row['Slot 2']:
@@ -176,7 +184,6 @@ def page_detection_doublons(df):
         st.download_button(label="📥 Télécharger les résultats CSV", data=result_df.to_csv(index=False, sep=';').encode('utf-8'), file_name=f"ppr_doublons_details_{date.today()}.csv", mime="text/csv")
     else:
         st.success("🎉 Aucune anomalie détectée.")
-        
     st.header("📧 Générer les mails de correction")
     if st.button("Générer le texte pour chaque utilisateur"):
         if num_anomalies > 0 and not summary_df.empty:
@@ -190,39 +197,29 @@ def page_detection_doublons(df):
                         anomaly_lines_en = []
 
                         for index, row in user_anomalies.iterrows():
-                            flight_date = row['Slot.Date'].strftime('%d/%m/%Y')
-                            immat = str(row['Immatriculation'])
-
-                            # Infos pour le premier vol
-                            res_num1 = str(row['ReservationNumber']) if pd.notna(row['ReservationNumber']) else 'N/A'
-                            callsign1 = str(row.get('Call sign', 'N/A'))
-                            slot1 = row['Slot.Hour'].strftime('%H:%M') if pd.notna(row['Slot.Hour']) else 'N/A'
-                            
-                            # Infos pour le second vol
-                            res_num2 = str(row['Next_ReservationNumber']) if pd.notna(row['Next_ReservationNumber']) else 'N/A'
-                            callsign2 = str(row.get('Next_Call_sign', 'N/A'))
-                            slot2 = row['Next_Slot.Hour'].strftime('%H:%M') if pd.notna(row['Next_Slot.Hour']) else 'N/A'
-
-                            ### FORMATAGE DATE/HEURE ###
                             # French details
-                            anomaly_lines_fr.append(f"{flight_date} {slot1} - N° réservation: {res_num1} - Immatriculation: {immat} - Call sign: {callsign1}")
-                            anomaly_lines_fr.append(f"{flight_date} {slot2} - N° réservation: {res_num2} - Immatriculation: {immat} - Call sign: {callsign2}")
+                            if row['Check'] == 'Erreur':
+                                reason_fr = "Horaires identiques"
+                            elif row['Type de mouvement'] == 'Arrival':
+                                reason_fr = "Deux 'Arrivées' consécutives"
+                            elif row['Type de mouvement'] == 'Departure':
+                                reason_fr = "Deux 'Départs' consécutifs"
+                            else:
+                                reason_fr = f"Deux '{row['Type de mouvement']}' consécutifs"
                             
-                            movement_translation_fr = {'Arrival': 'Arrivée', 'Departure': 'Départ'}
-                            translated_movement_fr = movement_translation_fr.get(row['Type de mouvement'], row['Type de mouvement'])
-                            reason_fr = "Motif: Horaires identiques" if row['Check'] == 'Erreur' else f"Motif: Deux '{translated_movement_fr}' consécutifs"
-                            anomaly_lines_fr.append(reason_fr)
-                            anomaly_lines_fr.append("") 
-
-                            ### FORMATAGE DATE/HEURE ###
                             # English details
-                            anomaly_lines_en.append(f"{flight_date} {slot1} - Reservation n°: {res_num1} - Registration: {immat} - Call sign: {callsign1}")
-                            anomaly_lines_en.append(f"{flight_date} {slot2} - Reservation n°: {res_num2} - Registration: {immat} - Call sign: {callsign2}")
+                            reason_en = "Identical times" if row['Check'] == 'Erreur' else f"Two consecutive {row['Type de mouvement']}s"
+                            
+                            flight_date = row['Slot.Date'].strftime('%d/%m/%Y')
+                            slot1 = row['Slot.Hour'].strftime('%H:%M') if pd.notna(row['Slot.Hour']) else 'N/A'
+                            slot2 = row['Next_Slot.Hour'].strftime('%H:%M') if pd.notna(row['Next_Slot.Hour']) else 'N/A'
+                            immat = str(row['Immatriculation'])
+                            callsign = str(row.get('Call sign', 'N/A'))
+                            
+                            anomaly_lines_fr.append(f"  - Vol du {flight_date} ({immat} / {callsign}), slots {slot1} & {slot2}. Motif : {reason_fr}")
+                            anomaly_lines_en.append(f"  - Flight on {flight_date} ({immat} / {callsign}), slots {slot1} & {slot2}. Reason: {reason_en}")
 
-                            reason_en = "Reason: Identical times" if row['Check'] == 'Erreur' else f"Reason: Two consecutive {row['Type de mouvement']}s"
-                            anomaly_lines_en.append(reason_en)
-                            anomaly_lines_en.append("")
-                        
+                        # --- French part ---
                         mail_body_fr = [
                             "Bonjour,",
                             "\nNous avons remarqué les doublons suivants sous votre compte PPR :\n",
@@ -231,6 +228,7 @@ def page_detection_doublons(df):
                             "Cordiales salutations,"
                         ]
                         
+                        # --- English part ---
                         mail_body_en = [
                             "\n\n______\n\n",
                             "Hello,",
@@ -246,7 +244,6 @@ def page_detection_doublons(df):
                 st.write("Aucun login associé aux anomalies.")
         else:
             st.info("Aucune anomalie à signaler.")
-            
     st.header("📋 Liste des PPR Actifs")
     active_ppr_filtered_days = active_ppr_full[active_ppr_full['Slot.Date'].isin(analysis_dates)].copy()
     active_ppr_filtered_days.sort_values(by=['Slot.Date', 'Immatriculation', 'Slot.Hour'], inplace=True)
@@ -267,38 +264,69 @@ def page_analyse_visuelle(df):
     active_ppr = df[df['Login (Suppression)'].isnull()].copy()
     active_ppr['Slot.Date'] = pd.to_datetime(active_ppr['Slot.Date']).dt.date
     
+    # Rendre le choix de la date dynamique
     available_dates = sorted(active_ppr['Slot.Date'].unique())
     
     if not available_dates:
         st.warning("Aucun vol actif trouvé dans le fichier chargé pour la visualisation.")
         return
 
+    # Formatter les dates pour l'affichage dans le selectbox
     date_options = [d.strftime('%d/%m/%Y') for d in available_dates]
     selected_date_str = st.selectbox("Choisissez une journée à analyser", date_options)
     
+    # Convertir la chaîne de caractères sélectionnée en objet date
     jour_choisi = datetime.strptime(selected_date_str, '%d/%m/%Y').date()
 
     show_rwy_check = st.checkbox("Mettre en évidence les RWYCHK")
     
-    st.header(f"Nombre de vols par heure pour le {jour_choisi.strftime('%d/%m/%Y')}")
+    st.header(f"Analyse pour le {jour_choisi.strftime('%d/%m/%Y')}")
     df_jour = active_ppr[active_ppr['Slot.Date'] == jour_choisi].copy()
     
     if df_jour.empty:
         st.warning(f"Aucun vol PPR prévu pour le {jour_choisi.strftime('%d/%m/%Y')}.")
-    else:
-        df_jour['Heure'] = df_jour['Slot.Hour'].apply(lambda t: t.hour)
-        df_flights = df_jour[df_jour['Call sign'] != 'RWYCHK']
-        vols_par_heure = df_flights.groupby(['Heure', 'Type de mouvement']).size().unstack(fill_value=0)
-        vols_par_heure = vols_par_heure.reindex(range(24), fill_value=0)
-        if 'Arrival' in vols_par_heure.columns: vols_par_heure.rename(columns={'Arrival': 'Arrivées'}, inplace=True)
-        if 'Departure' in vols_par_heure.columns: vols_par_heure.rename(columns={'Departure': 'Départs'}, inplace=True)
-        if show_rwy_check:
-            df_rwy = df_jour[df_jour['Call sign'] == 'RWYCHK']
-            if not df_rwy.empty:
-                rwy_par_heure = df_rwy.groupby('Heure').size().rename('RWYCHK')
-                vols_par_heure = pd.concat([vols_par_heure, rwy_par_heure], axis=1).fillna(0)
-                vols_par_heure['RWYCHK'] = vols_par_heure['RWYCHK'].astype(int)
-        st.bar_chart(vols_par_heure)
+        return
+
+    st.subheader("Nombre de vols par heure")
+    df_jour['Heure'] = df_jour['Slot.Hour'].apply(lambda t: t.hour if pd.notna(t) else None)
+    df_jour.dropna(subset=['Heure'], inplace=True)
+    df_jour['Heure'] = df_jour['Heure'].astype(int)
+
+    df_flights = df_jour[df_jour['Call sign'] != 'RWYCHK']
+    vols_par_heure = df_flights.groupby(['Heure', 'Type de mouvement']).size().unstack(fill_value=0)
+    vols_par_heure = vols_par_heure.reindex(range(24), fill_value=0)
+    
+    if 'Arrivée' not in vols_par_heure.columns: vols_par_heure['Arrivée'] = 0
+    if 'Départ' not in vols_par_heure.columns: vols_par_heure['Départ'] = 0
+    if 'Arrival' in vols_par_heure.columns: vols_par_heure.rename(columns={'Arrival': 'Arrivées'}, inplace=True)
+    if 'Departure' in vols_par_heure.columns: vols_par_heure.rename(columns={'Departure': 'Départs'}, inplace=True)
+
+    if show_rwy_check:
+        df_rwy = df_jour[df_jour['Call sign'] == 'RWYCHK']
+        if not df_rwy.empty:
+            rwy_par_heure = df_rwy.groupby('Heure').size().rename('RWYCHK')
+            vols_par_heure = pd.concat([vols_par_heure, rwy_par_heure], axis=1).fillna(0)
+            vols_par_heure['RWYCHK'] = vols_par_heure['RWYCHK'].astype(int)
+    st.bar_chart(vols_par_heure)
+
+    # --- Nouveaux graphiques ---
+    st.header("Analyse par Type")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("Vols par Type de Client")
+        if 'Type de client' in df_jour.columns:
+            client_type_counts = df_jour['Type de client'].value_counts()
+            st.bar_chart(client_type_counts)
+        else:
+            st.warning("La colonne 'Type de client' n'est pas disponible.")
+    with col2:
+        st.subheader("Vols par Type de Profil")
+        if 'Type de profil' in df_jour.columns:
+            profile_type_counts = df_jour['Type de profil'].value_counts()
+            st.bar_chart(profile_type_counts)
+        else:
+            st.warning("La colonne 'Type de profil' n'est pas disponible.")
+
 
 def get_season(dt):
     """Détermine la saison IATA (Winter/Summer) pour une date donnée."""
@@ -329,16 +357,21 @@ def get_analysis_dataframe(combined_df, jour_choisi):
         return None
     capacity_day_df = capacity_day_df.set_index('Heure')[['Capacité Totale', 'Capacité Arrivées']]
 
+    # --- Aggregate data from combined file ---
     df_jour = combined_df[combined_df['Slot.Date'] == jour_choisi].copy()
     
+    # Total counts
     total_counts = df_jour.groupby('Heure')[['Vols PPR', 'Vols SCR']].sum()
     
+    # Arrival counts - CORRECTED LOGIC
     df_jour_arrivals = df_jour[df_jour['Arrival - Departure'] == 'Arrival']
     if not df_jour_arrivals.empty:
         arrival_counts = df_jour_arrivals.groupby('Heure')[['Vols PPR', 'Vols SCR']].sum().rename(columns={'Vols PPR': 'Vols PPR Arrivées', 'Vols SCR': 'Vols SCR Arrivées'})
     else:
+        # Create an empty DataFrame with the correct column names if there are no arrivals
         arrival_counts = pd.DataFrame(columns=['Vols PPR Arrivées', 'Vols SCR Arrivées'])
 
+    # --- Combine DataFrames ---
     analysis_df = pd.DataFrame(index=range(24))
     analysis_df.index.name = 'Heure'
     analysis_df = analysis_df.join(capacity_day_df)
@@ -346,6 +379,7 @@ def get_analysis_dataframe(combined_df, jour_choisi):
     analysis_df = analysis_df.join(arrival_counts)
     analysis_df.fillna(0, inplace=True)
 
+    # --- Calculate Totals and Residuals ---
     analysis_df['Total Vols'] = analysis_df['Vols PPR'] + analysis_df['Vols SCR']
     analysis_df['Total Vols Arrivées'] = analysis_df['Vols PPR Arrivées'] + analysis_df['Vols SCR Arrivées']
     analysis_df['Capacité Résiduelle Totale'] = analysis_df['Capacité Totale'] - analysis_df['Total Vols']
@@ -357,6 +391,7 @@ def page_saturation_piste(combined_df):
     st.title("🚦 Analyse de Saturation Piste")
     st.markdown("Compare la charge de vols (PPR + SCR) à la capacité théorique de la piste.")
     
+    # Rendre le choix de la date dynamique
     available_dates = sorted(combined_df['Slot.Date'].unique())
     if not available_dates:
         st.warning("Aucun vol trouvé dans le fichier de prévisions.")
@@ -376,11 +411,13 @@ def page_saturation_piste(combined_df):
     
     st.header(f"Analyse pour le {jour_choisi.strftime('%d/%m/%Y')}")
 
+    # Utiliser la fonction mise en cache
     analysis_df = get_analysis_dataframe(combined_df, jour_choisi)
 
     if analysis_df is None:
-        return 
+        return # Erreur gérée dans la fonction de calcul
 
+    # --- Display UI ---
     analysis_type = st.radio("Choisissez le type d'analyse", ("Totale", "Arrivées"), horizontal=True)
     
     with st.spinner("Génération des graphiques en cours..."):
@@ -392,12 +429,15 @@ def page_saturation_piste(combined_df):
         source = analysis_df.reset_index().rename(columns={'index': 'Heure'})
         source_melted = source.melt(id_vars=['Heure', capacity_col], value_vars=value_vars, var_name='Type de Vol', value_name='Nombre de Vols')
         
+        # Graphique de charge
         bars = alt.Chart(source_melted).mark_bar().encode(x=alt.X('Heure:O', title='Heure'), y=alt.Y('sum(Nombre de Vols):Q', title='Nombre de Vols'), color=alt.Color('Type de Vol:N'), tooltip=['Heure', 'Type de Vol', 'sum(Nombre de Vols)'])
         line = alt.Chart(source).mark_line(color='red', strokeDash=[5,5]).encode(x='Heure:O', y=f'{capacity_col}:Q', tooltip=['Heure', capacity_col])
         charge_chart = (bars + line).properties(title=f"Charge {analysis_type} vs. Capacité").resolve_scale(y='shared')
 
+        # Graphique de capacité résiduelle
         residual_chart = alt.Chart(source).mark_bar().encode(x=alt.X('Heure:O', title='Heure'), y=alt.Y(f'{residual_col}:Q', title='Capacité Résiduelle'), color=alt.condition(alt.datum[residual_col] >= 0, alt.value('green'), alt.value('red')), tooltip=['Heure', residual_col]).properties(title=f"Capacité Résiduelle {analysis_type}")
         
+        # Combiner les graphiques verticalement pour aligner les axes
         combined_chart = alt.vconcat(charge_chart, residual_chart)
         
         st.altair_chart(combined_chart, use_container_width=True)
@@ -410,6 +450,7 @@ def calculate_hourly_counts(df, analysis_day):
     df_jour = df[df['Slot.Date'] == analysis_day].copy()
     total_counts = df_jour.groupby('Heure')[['Vols PPR', 'Vols SCR']].sum()
     
+    # LOGIQUE CORRIGÉE
     df_jour_arrivals = df_jour[df_jour['Arrival - Departure'] == 'Arrival']
     if not df_jour_arrivals.empty:
         arrival_counts = df_jour_arrivals.groupby('Heure')[['Vols PPR', 'Vols SCR']].sum().rename(columns={'Vols PPR': 'Vols PPR Arrivées', 'Vols SCR': 'Vols SCR Arrivées'})
@@ -453,6 +494,7 @@ def page_post_operationnelle():
         predicted_counts = calculate_hourly_counts(st.session_state.predicted_data, jour_analyse)
         actual_counts = calculate_hourly_counts(st.session_state.actual_data, jour_analyse)
 
+        # Merge and calculate deltas
         comparison_df = predicted_counts.join(actual_counts, lsuffix='_Prévu', rsuffix='_Réalisé')
         comparison_df['Delta PPR'] = comparison_df['Vols PPR_Réalisé'] - comparison_df['Vols PPR_Prévu']
         comparison_df['Delta SCR'] = comparison_df['Vols SCR_Réalisé'] - comparison_df['Vols SCR_Prévu']
@@ -461,6 +503,7 @@ def page_post_operationnelle():
         st.subheader("Tableau Comparatif Prévu vs. Réalisé")
         st.dataframe(comparison_df)
 
+        # --- Visualisation ---
         analysis_type = st.radio("Choisissez le type d'analyse à visualiser", ("Totale", "Arrivées"), horizontal=True, key="post_op_radio")
 
         if analysis_type == 'Totale':
@@ -495,16 +538,26 @@ page = st.sidebar.radio("Choisissez une page", ["Détection Doublons", "Analyse 
 st.sidebar.title("Fichiers de données")
 
 # --- Logique de chargement et d'affichage des pages ---
-if page in ["Détection Doublons", "Analyse & Visualisations"]:
+if page == "Détection Doublons":
     ppr_uploaded_file = st.sidebar.file_uploader("Fichier PPR Détaillé (`Reservations.csv`)", type=['csv'])
     if ppr_uploaded_file is not None:
         st.session_state.ppr_data = load_and_prepare_data(ppr_uploaded_file, 'PPR_DETAIL')
     
     if st.session_state.ppr_data is not None:
-        if page == "Détection Doublons": page_detection_doublons(st.session_state.ppr_data)
-        elif page == "Analyse & Visualisations": page_analyse_visuelle(st.session_state.ppr_data)
+        page_detection_doublons(st.session_state.ppr_data)
     else:
         st.info("Veuillez charger un fichier PPR détaillé. [Lien pour récupérer le fichier](https://ppr.gva.ch/Reservations/Index).")
+
+elif page == "Analyse & Visualisations":
+    vis_uploaded_file = st.sidebar.file_uploader("Fichier PPR Riche (`PBI_PPR_EPL.xlsx`)", type=['xlsx', 'xls'], key="ppr_rich_vis")
+    if vis_uploaded_file is not None:
+        st.session_state.vis_data = load_and_prepare_data(vis_uploaded_file, 'PPR_RICH')
+    
+    if st.session_state.vis_data is not None:
+        page_analyse_visuelle(st.session_state.vis_data)
+    else:
+        st.info("Veuillez charger un fichier PPR riche (format PBI_PPR_EPL) pour les visualisations.")
+
 
 elif page == "Analyse de Saturation Piste":
     saturation_file = st.sidebar.file_uploader("Fichier Prévisions (PPR+SCR)", type=['xlsx', 'xls'])
