@@ -4,6 +4,8 @@ from datetime import date, timedelta, datetime
 import numpy as np
 import calendar
 import altair as alt
+import os
+import glob
 
 # --- Configuration de la page Streamlit ---
 st.set_page_config(
@@ -25,14 +27,49 @@ if 'actual_data' not in st.session_state:
 # --- Fichiers de données statiques ---
 CAPACITIES_FILE = 'capacities.xlsx'
 
+# --- Fonctions utilitaires ---
+
+def get_latest_local_file(pattern_filename):
+    """
+    Recherche le fichier le plus récent correspondant au pattern dans le dossier Downloads de l'utilisateur.
+    Chemin cible : D:\LocalMedia\{user.name}\Downloads\
+    """
+    try:
+        # Récupérer le nom d'utilisateur courant
+        username = os.environ.get('USERNAME') or os.getlogin()
+        
+        # Construire le chemin du dossier
+        base_dir = f"D:\\LocalMedia\\{username}\\Downloads"
+        
+        # Vérifier si le dossier existe
+        if not os.path.exists(base_dir):
+            return None, f"Le dossier {base_dir} n'existe pas."
+            
+        # Construire le pattern de recherche complet
+        search_pattern = os.path.join(base_dir, pattern_filename)
+        
+        # Lister les fichiers
+        list_of_files = glob.glob(search_pattern)
+        
+        if not list_of_files:
+            return None, f"Aucun fichier correspondant à '{pattern_filename}' trouvé dans {base_dir}."
+            
+        # Trouver le fichier le plus récent
+        latest_file = max(list_of_files, key=os.path.getctime)
+        return latest_file, None
+        
+    except Exception as e:
+        return None, str(e)
+
 # --- Fonctions de traitement des données (mises en cache pour la performance) ---
 
 @st.cache_data
-def load_and_prepare_data(uploaded_file, file_type):
-    """Charge, lit et normalise les données des différents types de fichiers."""
+def load_and_prepare_data(file_input, file_type):
+    """Charge, lit et normalise les données. file_input peut être un fichier uploadé ou un chemin (str)."""
     try:
-        if file_type == 'PPR_DETAIL': # Pour la détection de doublons
-            raw_df = pd.read_csv(uploaded_file, sep=';', encoding='latin-1')
+        if file_type == 'PPR_DETAIL': # Pour la détection de doublons et visualisation
+            # read_csv accepte aussi bien un objet fichier qu'un chemin string
+            raw_df = pd.read_csv(file_input, sep=';', encoding='latin-1')
             required_cols = ['Id', 'Date', 'CallSign', 'Registration', 'MovementTypeId', 'Deleted']
             if not all(col in raw_df.columns for col in required_cols):
                 st.error(f"Le fichier PPR détaillé semble invalide.")
@@ -49,7 +86,7 @@ def load_and_prepare_data(uploaded_file, file_type):
             return raw_df
 
         elif file_type == 'COMBINED': # Pour la saturation et l'analyse post-op
-            raw_df = pd.read_excel(uploaded_file)
+            raw_df = pd.read_excel(file_input)
             # Adapter aux nouveaux noms de colonnes du fichier de prévision
             if 'Arrival - Departure Code' in raw_df.columns:
                  raw_df.rename(columns={'Arrival - Departure Code': 'Arrival - Departure'}, inplace=True)
@@ -359,14 +396,14 @@ def page_analyse_visuelle(df):
             client_type_counts = df_jour['Type de client'].value_counts()
             st.bar_chart(client_type_counts)
         else:
-            st.warning("La colonne 'Type de client' n'est pas disponible.")
+            st.warning("La colonne 'Type de client' n'est pas disponible dans le fichier actuel.")
     with col2:
         st.subheader("Vols par Type de Profil")
         if 'Type de profil' in df_jour.columns:
             profile_type_counts = df_jour['Type de profil'].value_counts()
             st.bar_chart(profile_type_counts)
         else:
-            st.warning("La colonne 'Type de profil' n'est pas disponible.")
+            st.warning("La colonne 'Type de profil' n'est pas disponible dans le fichier actuel.")
 
 
 def get_season(dt):
@@ -579,26 +616,23 @@ page = st.sidebar.radio("Choisissez une page", ["Détection Doublons", "Analyse 
 st.sidebar.title("Fichiers de données")
 
 # --- Logique de chargement et d'affichage des pages ---
-if page == "Détection Doublons":
-    ppr_uploaded_file = st.sidebar.file_uploader("Fichier PPR Détaillé (`Reservations.csv`)", type=['csv'])
-    if ppr_uploaded_file is not None:
-        st.session_state.ppr_data = load_and_prepare_data(ppr_uploaded_file, 'PPR_DETAIL')
+if page in ["Détection Doublons", "Analyse & Visualisations"]:
+    # Auto-load ou Upload
+    st.info("Recherche automatique du fichier Reservations*.csv le plus récent...")
+    local_file_path, error_msg = get_latest_local_file("Reservations*.csv")
+    
+    if local_file_path:
+        st.success(f"Fichier trouvé et chargé : {os.path.basename(local_file_path)}")
+        st.session_state.ppr_data = load_and_prepare_data(local_file_path, 'PPR_DETAIL')
+    else:
+        st.warning(f"Fichier local non trouvé ({error_msg}). Veuillez utiliser l'upload manuel.")
+        ppr_uploaded_file = st.sidebar.file_uploader("Fichier PPR Détaillé (`Reservations.csv`)", type=['csv'])
+        if ppr_uploaded_file is not None:
+            st.session_state.ppr_data = load_and_prepare_data(ppr_uploaded_file, 'PPR_DETAIL')
     
     if st.session_state.ppr_data is not None:
-        page_detection_doublons(st.session_state.ppr_data)
-    else:
-        st.info("Veuillez charger un fichier PPR détaillé. [Lien pour récupérer le fichier](https://ppr.gva.ch/Reservations/Index).")
-
-elif page == "Analyse & Visualisations":
-    vis_uploaded_file = st.sidebar.file_uploader("Fichier PPR Riche (`PBI_PPR_EPL.xlsx`)", type=['xlsx', 'xls'], key="ppr_rich_vis")
-    if vis_uploaded_file is not None:
-        st.session_state.vis_data = load_and_prepare_data(vis_uploaded_file, 'PPR_RICH')
-    
-    if st.session_state.vis_data is not None:
-        page_analyse_visuelle(st.session_state.vis_data)
-    else:
-        st.info("Veuillez charger un fichier PPR riche (format PBI_PPR_EPL) pour les visualisations.")
-
+        if page == "Détection Doublons": page_detection_doublons(st.session_state.ppr_data)
+        elif page == "Analyse & Visualisations": page_analyse_visuelle(st.session_state.ppr_data)
 
 elif page == "Analyse de Saturation Piste":
     saturation_file = st.sidebar.file_uploader("Fichier Prévisions (PPR+SCR)", type=['xlsx', 'xls'])
