@@ -33,7 +33,7 @@ def load_and_prepare_data(uploaded_file, file_type):
     try:
         if file_type == 'PPR_DETAIL': # Pour la détection de doublons
             raw_df = pd.read_csv(uploaded_file, sep=';', encoding='latin-1')
-            required_cols = ['Id', 'Date', 'CallSign', 'Registration', 'MovementTypeId', 'Deleted']
+            required_cols = ['ReservationNumber', 'Date', 'CallSign', 'Registration', 'MovementTypeId', 'Deleted']
             if not all(col in raw_df.columns for col in required_cols):
                 st.error(f"Le fichier PPR détaillé semble invalide.")
                 return None
@@ -95,7 +95,7 @@ def process_ppr_data(df, analysis_dates):
         # Récupération des infos de la ligne suivante pour comparaison ET affichage
         duplicates['Next_Slot.Hour'] = duplicates.groupby(group_cols)['Slot.Hour'].shift(-1)
         duplicates['Next_Type de mouvement'] = duplicates.groupby(group_cols)['Type de mouvement'].shift(-1)
-        duplicates['Next_Id'] = duplicates.groupby(group_cols)['Id'].shift(-1) # Nouveau: Récup ID suivant
+        duplicates['Next_Id'] = duplicates.groupby(group_cols)['ReservationNumber'].shift(-1) # Nouveau: Récup ID suivant
         duplicates['Next_Call_sign'] = duplicates.groupby(group_cols)['Call sign'].shift(-1) # Nouveau: Récup CallSign suivant
         
         is_double = (duplicates['Type de mouvement'] == duplicates['Next_Type de mouvement']) & duplicates['Next_Type de mouvement'].notna()
@@ -178,7 +178,7 @@ def page_detection_doublons(df):
                 "Next_Id": "ID Vol 2"
             }
             
-            cols_order = ['Inclure', 'Slot.Date', 'Immatriculation', 'Call sign', 'Slot.Hour', 'Next_Slot.Hour', 'Type de mouvement', 'Check', 'OwnerProfileLogin', 'Id']
+            cols_order = ['Inclure', 'Slot.Date', 'Immatriculation', 'Call sign', 'Slot.Hour', 'Next_Slot.Hour', 'Type de mouvement', 'Check', 'OwnerProfileLogin', 'ReservationNumber']
             
             edited_df = st.data_editor(
                 editor_df[cols_order],
@@ -265,7 +265,7 @@ def page_detection_doublons(df):
                             immat = str(row['Immatriculation'])
                             
                             # Vol 1
-                            id_1 = str(row['Id'])
+                            id_1 = str(row['ReservationNumber'])
                             callsign_1 = str(row.get('Call sign', 'N/A'))
                             # slot1 = row['Slot.Hour'].strftime('%H:%M') if pd.notna(row['Slot.Hour']) else 'N/A'
                             
@@ -319,7 +319,7 @@ def page_detection_doublons(df):
     active_ppr_filtered_days.sort_values(by=['Slot.Date', 'Immatriculation', 'Slot.Hour'], inplace=True)
     with st.expander("Afficher/Masquer la liste complète", expanded=False):
         filter_text = st.text_input("Filtrer la liste :", placeholder="Ex: HBLVK, T7-SCT, SFS...")
-        display_cols = ['Slot.Date', 'Immatriculation', 'Call sign', 'Slot.Hour', 'Type de mouvement', 'HandlingAgentName', 'OwnerProfileLogin', 'Id']
+        display_cols = ['Slot.Date', 'Immatriculation', 'Call sign', 'Slot.Hour', 'Type de mouvement', 'HandlingAgentName', 'OwnerProfileLogin', 'ReservationNumber']
         display_cols_exist = [col for col in display_cols if col in active_ppr_filtered_days.columns]
         filtered_list = active_ppr_filtered_days
         if filter_text:
