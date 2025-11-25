@@ -33,9 +33,10 @@ def load_and_prepare_data(uploaded_file, file_type):
     try:
         if file_type == 'PPR_DETAIL': # Pour la détection de doublons
             raw_df = pd.read_csv(uploaded_file, sep=';', encoding='latin-1')
-            required_cols = ['ReservationNumber', 'Date', 'CallSign', 'Registration', 'MovementTypeId', 'Deleted']
+            # Ajout de ReservationNumber dans les colonnes requises
+            required_cols = ['Id', 'Date', 'CallSign', 'Registration', 'MovementTypeId', 'Deleted', 'ReservationNumber']
             if not all(col in raw_df.columns for col in required_cols):
-                st.error(f"Le fichier PPR détaillé semble invalide.")
+                st.error(f"Le fichier PPR détaillé semble invalide (colonne manquante, ex: ReservationNumber).")
                 return None
             raw_df = raw_df.rename(columns={'CallSign': 'Call sign', 'Registration': 'Immatriculation'})
             datetime_col = pd.to_datetime(raw_df['Date'], errors='coerce', dayfirst=True)
@@ -95,8 +96,9 @@ def process_ppr_data(df, analysis_dates):
         # Récupération des infos de la ligne suivante pour comparaison ET affichage
         duplicates['Next_Slot.Hour'] = duplicates.groupby(group_cols)['Slot.Hour'].shift(-1)
         duplicates['Next_Type de mouvement'] = duplicates.groupby(group_cols)['Type de mouvement'].shift(-1)
-        duplicates['Next_Id'] = duplicates.groupby(group_cols)['ReservationNumber'].shift(-1) # Nouveau: Récup ID suivant
-        duplicates['Next_Call_sign'] = duplicates.groupby(group_cols)['Call sign'].shift(-1) # Nouveau: Récup CallSign suivant
+        # On utilise ReservationNumber au lieu de Id
+        duplicates['Next_ReservationNumber'] = duplicates.groupby(group_cols)['ReservationNumber'].shift(-1) 
+        duplicates['Next_Call_sign'] = duplicates.groupby(group_cols)['Call sign'].shift(-1)
         
         is_double = (duplicates['Type de mouvement'] == duplicates['Next_Type de mouvement']) & duplicates['Next_Type de mouvement'].notna()
         is_error = (duplicates['Slot.Hour'] == duplicates['Next_Slot.Hour']) & duplicates['Next_Slot.Hour'].notna()
@@ -174,10 +176,11 @@ def page_detection_doublons(df):
                 "Type de mouvement": "Mouvement",
                 "Check": "Type",
                 "OwnerProfileLogin": "Login",
-                "Id": "ID Vol 1",
-                "Next_Id": "ID Vol 2"
+                "ReservationNumber": "Résa 1",
+                "Next_ReservationNumber": "Résa 2"
             }
             
+            # Remplacement de Id par ReservationNumber dans l'ordre des colonnes
             cols_order = ['Inclure', 'Slot.Date', 'Immatriculation', 'Call sign', 'Slot.Hour', 'Next_Slot.Hour', 'Type de mouvement', 'Check', 'OwnerProfileLogin', 'ReservationNumber']
             
             edited_df = st.data_editor(
@@ -264,25 +267,22 @@ def page_detection_doublons(df):
                             flight_date = row['Slot.Date'].strftime('%d/%m/%Y')
                             immat = str(row['Immatriculation'])
                             
-                            # Vol 1
-                            id_1 = str(row['ReservationNumber'])
-                            callsign_1 = str(row.get('Call sign', 'N/A'))
-                            # slot1 = row['Slot.Hour'].strftime('%H:%M') if pd.notna(row['Slot.Hour']) else 'N/A'
+                            # Formatage des heures
+                            slot1_time = row['Slot.Hour'].strftime('%H:%M') if pd.notna(row['Slot.Hour']) else '00:00'
+                            slot2_time = row['Next_Slot.Hour'].strftime('%H:%M') if pd.notna(row['Next_Slot.Hour']) else '00:00'
                             
-                            # Vol 2 (données décalées/shifted)
-                            # On gère le formatage float->int->str car shift peut introduire des floats
-                            try:
-                                id_2 = str(int(row['Next_Id'])) if pd.notna(row['Next_Id']) else "N/A"
-                            except:
-                                id_2 = str(row['Next_Id'])
-                                
+                            # Vol 1
+                            resa_1 = str(row['ReservationNumber']) # Utilisation de ReservationNumber
+                            callsign_1 = str(row.get('Call sign', 'N/A'))
+                            
+                            # Vol 2
+                            resa_2 = str(row['Next_ReservationNumber']) if pd.notna(row['Next_ReservationNumber']) else "N/A"
                             callsign_2 = str(row.get('Next_Call_sign', 'N/A'))
                             if callsign_2 == 'nan': callsign_2 = 'N/A'
-                            # slot2 = row['Next_Slot.Hour'].strftime('%H:%M') if pd.notna(row['Next_Slot.Hour']) else 'N/A'
 
-                            # Construction des lignes formatées
-                            line_1 = f"{flight_date} - N° réservation: {id_1} - Immatriculation: {immat} - Call sign: {callsign_1}"
-                            line_2 = f"{flight_date} - N° réservation: {id_2} - Immatriculation: {immat} - Call sign: {callsign_2}"
+                            # Construction des lignes formatées avec Date + Heure
+                            line_1 = f"{flight_date} {slot1_time} - N° réservation: {resa_1} - Immatriculation: {immat} - Call sign: {callsign_1}"
+                            line_2 = f"{flight_date} {slot2_time} - N° réservation: {resa_2} - Immatriculation: {immat} - Call sign: {callsign_2}"
                             
                             # Ajout au bloc texte
                             anomaly_lines_fr.append(f"{line_1}\n{line_2}\nMotif : {reason_fr}\n")
@@ -319,6 +319,7 @@ def page_detection_doublons(df):
     active_ppr_filtered_days.sort_values(by=['Slot.Date', 'Immatriculation', 'Slot.Hour'], inplace=True)
     with st.expander("Afficher/Masquer la liste complète", expanded=False):
         filter_text = st.text_input("Filtrer la liste :", placeholder="Ex: HBLVK, T7-SCT, SFS...")
+        # Ajout de ReservationNumber à la liste
         display_cols = ['Slot.Date', 'Immatriculation', 'Call sign', 'Slot.Hour', 'Type de mouvement', 'HandlingAgentName', 'OwnerProfileLogin', 'ReservationNumber']
         display_cols_exist = [col for col in display_cols if col in active_ppr_filtered_days.columns]
         filtered_list = active_ppr_filtered_days
