@@ -21,6 +21,7 @@ if 'predicted_data' not in st.session_state:
     st.session_state.predicted_data = None
 if 'actual_data' not in st.session_state:
     st.session_state.actual_data = None
+# 'vis_data' n'est plus nécessaire car on utilise ppr_data
 
 # --- Fichiers de données statiques ---
 CAPACITIES_FILE = 'capacities.xlsx'
@@ -31,7 +32,7 @@ CAPACITIES_FILE = 'capacities.xlsx'
 def load_and_prepare_data(uploaded_file, file_type):
     """Charge, lit et normalise les données des différents types de fichiers."""
     try:
-        if file_type == 'PPR_DETAIL': # Pour la détection de doublons
+        if file_type == 'PPR_DETAIL': # Pour la détection de doublons ET l'analyse visuelle
             raw_df = pd.read_csv(uploaded_file, sep=';', encoding='latin-1')
             # Ajout de ReservationNumber dans les colonnes requises
             required_cols = ['Id', 'Date', 'CallSign', 'Registration', 'MovementTypeId', 'Deleted', 'ReservationNumber']
@@ -329,9 +330,10 @@ def page_detection_doublons(df):
         st.dataframe(filtered_list[display_cols_exist])
 
 def page_analyse_visuelle(df):
-    """Affiche la page d'analyse PPR avec des graphiques."""
+    """Affiche la page d'analyse PPR avec des graphiques basés sur le fichier PPR chargé."""
     st.title("📊 Analyse & Visualisations des PPR")
     
+    # Filtrer uniquement les PPR actifs (non supprimés)
     active_ppr = df[df['Login (Suppression)'].isnull()].copy()
     active_ppr['Slot.Date'] = pd.to_datetime(active_ppr['Slot.Date']).dt.date
     
@@ -358,12 +360,14 @@ def page_analyse_visuelle(df):
         st.warning(f"Aucun vol PPR prévu pour le {jour_choisi.strftime('%d/%m/%Y')}.")
         return
 
+    # --- Graphique 1 : Vols par Heure ---
     st.subheader("Nombre de vols par heure")
     df_jour['Heure'] = df_jour['Slot.Hour'].apply(lambda t: t.hour if pd.notna(t) else None)
     df_jour.dropna(subset=['Heure'], inplace=True)
     df_jour['Heure'] = df_jour['Heure'].astype(int)
 
     df_flights = df_jour[df_jour['Call sign'] != 'RWYCHK']
+    # 'Type de mouvement' est déjà défini dans load_and_prepare_data (Arrival/Departure)
     vols_par_heure = df_flights.groupby(['Heure', 'Type de mouvement']).size().unstack(fill_value=0)
     vols_par_heure = vols_par_heure.reindex(range(24), fill_value=0)
     
@@ -380,23 +384,18 @@ def page_analyse_visuelle(df):
             vols_par_heure['RWYCHK'] = vols_par_heure['RWYCHK'].astype(int)
     st.bar_chart(vols_par_heure)
 
-    # --- Nouveaux graphiques ---
-    st.header("Analyse par Type")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.subheader("Vols par Type de Client")
-        if 'Type de client' in df_jour.columns:
-            client_type_counts = df_jour['Type de client'].value_counts()
-            st.bar_chart(client_type_counts)
-        else:
-            st.warning("La colonne 'Type de client' n'est pas disponible.")
-    with col2:
-        st.subheader("Vols par Type de Profil")
-        if 'Type de profil' in df_jour.columns:
-            profile_type_counts = df_jour['Type de profil'].value_counts()
-            st.bar_chart(profile_type_counts)
-        else:
-            st.warning("La colonne 'Type de profil' n'est pas disponible.")
+    # --- Graphique 2 : Vols par Client ---
+    st.header("Analyse par Client")
+    # Suppression de "Type de profil" et utilisation de "OwnerProfileLogin" pour le client
+    
+    st.subheader("Vols par Client (Login)")
+    if 'OwnerProfileLogin' in df_jour.columns:
+        # On compte les occurrences de chaque login
+        client_counts = df_jour['OwnerProfileLogin'].value_counts()
+        # On peut limiter l'affichage au top 20 pour la lisibilité si besoin
+        st.bar_chart(client_counts)
+    else:
+        st.warning("La colonne 'OwnerProfileLogin' n'est pas disponible dans le fichier chargé.")
 
 
 def get_season(dt):
@@ -620,14 +619,11 @@ if page == "Détection Doublons":
         st.info("Veuillez charger un fichier PPR détaillé. [Lien pour récupérer le fichier](https://ppr.gva.ch/Reservations/Index).")
 
 elif page == "Analyse & Visualisations":
-    vis_uploaded_file = st.sidebar.file_uploader("Fichier PPR Riche (`PBI_PPR_EPL.xlsx`)", type=['xlsx', 'xls'], key="ppr_rich_vis")
-    if vis_uploaded_file is not None:
-        st.session_state.vis_data = load_and_prepare_data(vis_uploaded_file, 'PPR_RICH')
-    
-    if st.session_state.vis_data is not None:
-        page_analyse_visuelle(st.session_state.vis_data)
+    # MODIFICATION: Utilisation directe des données déjà chargées dans st.session_state.ppr_data
+    if st.session_state.ppr_data is not None:
+        page_analyse_visuelle(st.session_state.ppr_data)
     else:
-        st.info("Veuillez charger un fichier PPR riche (format PBI_PPR_EPL) pour les visualisations.")
+        st.info("Veuillez d'abord charger le fichier PPR Détaillé dans la section 'Détection Doublons'.")
 
 
 elif page == "Analyse de Saturation Piste":
