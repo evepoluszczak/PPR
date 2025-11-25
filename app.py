@@ -88,9 +88,16 @@ def process_ppr_data(df, analysis_dates):
         duplicates = duplicates[duplicates['Slot.Date'].isin(analysis_dates)]
 
         if duplicates.empty: return pd.DataFrame()
+        
+        # Tri important pour que le shift fonctionne chronologiquement
         duplicates.sort_values(by=group_cols + ['Slot.Hour'], inplace=True)
+        
+        # Récupération des infos de la ligne suivante pour comparaison ET affichage
         duplicates['Next_Slot.Hour'] = duplicates.groupby(group_cols)['Slot.Hour'].shift(-1)
         duplicates['Next_Type de mouvement'] = duplicates.groupby(group_cols)['Type de mouvement'].shift(-1)
+        duplicates['Next_Id'] = duplicates.groupby(group_cols)['Id'].shift(-1) # Nouveau: Récup ID suivant
+        duplicates['Next_Call_sign'] = duplicates.groupby(group_cols)['Call sign'].shift(-1) # Nouveau: Récup CallSign suivant
+        
         is_double = (duplicates['Type de mouvement'] == duplicates['Next_Type de mouvement']) & duplicates['Next_Type de mouvement'].notna()
         is_error = (duplicates['Slot.Hour'] == duplicates['Next_Slot.Hour']) & duplicates['Next_Slot.Hour'].notna()
         duplicates['Check'] = ''
@@ -166,10 +173,12 @@ def page_detection_doublons(df):
                 "Call sign": "CallSign",
                 "Type de mouvement": "Mouvement",
                 "Check": "Type",
-                "OwnerProfileLogin": "Login"
+                "OwnerProfileLogin": "Login",
+                "Id": "ID Vol 1",
+                "Next_Id": "ID Vol 2"
             }
             
-            cols_order = ['Inclure', 'Slot.Date', 'Immatriculation', 'Call sign', 'Slot.Hour', 'Next_Slot.Hour', 'Type de mouvement', 'Check', 'OwnerProfileLogin']
+            cols_order = ['Inclure', 'Slot.Date', 'Immatriculation', 'Call sign', 'Slot.Hour', 'Next_Slot.Hour', 'Type de mouvement', 'Check', 'OwnerProfileLogin', 'Id']
             
             edited_df = st.data_editor(
                 editor_df[cols_order],
@@ -237,34 +246,54 @@ def page_detection_doublons(df):
                         anomaly_lines_en = []
 
                         for index, row in user_anomalies.iterrows():
-                            # French details
+                            # Détermination du motif
                             if row['Check'] == 'Erreur':
                                 reason_fr = "Horaires identiques"
+                                reason_en = "Identical times"
                             elif row['Type de mouvement'] == 'Arrival':
                                 reason_fr = "Deux 'Arrivées' consécutives"
+                                reason_en = "Two consecutive 'Arrivals'"
                             elif row['Type de mouvement'] == 'Departure':
                                 reason_fr = "Deux 'Départs' consécutifs"
+                                reason_en = "Two consecutive 'Departures'"
                             else:
                                 reason_fr = f"Deux '{row['Type de mouvement']}' consécutifs"
+                                reason_en = f"Two consecutive '{row['Type de mouvement']}'s"
                             
-                            # English details
-                            reason_en = "Identical times" if row['Check'] == 'Erreur' else f"Two consecutive {row['Type de mouvement']}s"
-                            
+                            # Récupération des données pour les deux lignes
                             flight_date = row['Slot.Date'].strftime('%d/%m/%Y')
-                            slot1 = row['Slot.Hour'].strftime('%H:%M') if pd.notna(row['Slot.Hour']) else 'N/A'
-                            slot2 = row['Next_Slot.Hour'].strftime('%H:%M') if pd.notna(row['Next_Slot.Hour']) else 'N/A'
                             immat = str(row['Immatriculation'])
-                            callsign = str(row.get('Call sign', 'N/A'))
                             
-                            anomaly_lines_fr.append(f"  - Vol du {flight_date} ({immat} / {callsign}), slots {slot1} & {slot2}. Motif : {reason_fr}")
-                            anomaly_lines_en.append(f"  - Flight on {flight_date} ({immat} / {callsign}), slots {slot1} & {slot2}. Reason: {reason_en}")
+                            # Vol 1
+                            id_1 = str(row['Id'])
+                            callsign_1 = str(row.get('Call sign', 'N/A'))
+                            # slot1 = row['Slot.Hour'].strftime('%H:%M') if pd.notna(row['Slot.Hour']) else 'N/A'
+                            
+                            # Vol 2 (données décalées/shifted)
+                            # On gère le formatage float->int->str car shift peut introduire des floats
+                            try:
+                                id_2 = str(int(row['Next_Id'])) if pd.notna(row['Next_Id']) else "N/A"
+                            except:
+                                id_2 = str(row['Next_Id'])
+                                
+                            callsign_2 = str(row.get('Next_Call_sign', 'N/A'))
+                            if callsign_2 == 'nan': callsign_2 = 'N/A'
+                            # slot2 = row['Next_Slot.Hour'].strftime('%H:%M') if pd.notna(row['Next_Slot.Hour']) else 'N/A'
+
+                            # Construction des lignes formatées
+                            line_1 = f"{flight_date} - N° réservation: {id_1} - Immatriculation: {immat} - Call sign: {callsign_1}"
+                            line_2 = f"{flight_date} - N° réservation: {id_2} - Immatriculation: {immat} - Call sign: {callsign_2}"
+                            
+                            # Ajout au bloc texte
+                            anomaly_lines_fr.append(f"{line_1}\n{line_2}\nMotif : {reason_fr}\n")
+                            anomaly_lines_en.append(f"{line_1}\n{line_2}\nReason: {reason_en}\n")
 
                         # --- French part ---
                         mail_body_fr = [
                             "Bonjour,",
                             "\nNous avons remarqué les doublons suivants sous votre compte PPR :\n",
                             *anomaly_lines_fr,
-                            "\nNous vous remercions de bien vouloir vérifier ces PPR pour une mise en conformité de la capacité réservée.",
+                            "Nous vous remercions de bien vouloir vérifier ces PPR pour une mise en conformité de la capacité réservée.",
                             "Cordiales salutations,"
                         ]
                         
@@ -274,7 +303,7 @@ def page_detection_doublons(df):
                             "Hello,",
                             "\nWe have noticed the following duplicates under your PPR account:\n",
                             *anomaly_lines_en,
-                            "\nWe would be grateful if you could check these PPRs to ensure that the booked capacity is correct.",
+                            "We would be grateful if you could check these PPRs to ensure that the booked capacity is correct.",
                             "Best regards,"
                         ]
 
@@ -290,7 +319,7 @@ def page_detection_doublons(df):
     active_ppr_filtered_days.sort_values(by=['Slot.Date', 'Immatriculation', 'Slot.Hour'], inplace=True)
     with st.expander("Afficher/Masquer la liste complète", expanded=False):
         filter_text = st.text_input("Filtrer la liste :", placeholder="Ex: HBLVK, T7-SCT, SFS...")
-        display_cols = ['Slot.Date', 'Immatriculation', 'Call sign', 'Slot.Hour', 'Type de mouvement', 'HandlingAgentName', 'OwnerProfileLogin']
+        display_cols = ['Slot.Date', 'Immatriculation', 'Call sign', 'Slot.Hour', 'Type de mouvement', 'HandlingAgentName', 'OwnerProfileLogin', 'Id']
         display_cols_exist = [col for col in display_cols if col in active_ppr_filtered_days.columns]
         filtered_list = active_ppr_filtered_days
         if filter_text:
