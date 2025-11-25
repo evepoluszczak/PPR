@@ -237,8 +237,18 @@ def page_detection_doublons(df):
         else:
             st.info("Toutes les anomalies potentielles ont été ignorées manuellement.")
 
-    st.header("📧 Générer les mails de correction")
-    if st.button("Générer le texte pour chaque utilisateur"):
+    st.header("📧 Actions Emails")
+    
+    col_btn1, col_btn2 = st.columns(2)
+    
+    with col_btn1:
+        btn_gen_text = st.button("Générer le texte pour chaque utilisateur")
+        
+    with col_btn2:
+        btn_open_outlook = st.button("📤 Préparer les brouillons dans Outlook", help="Ouvre Outlook Desktop et crée les brouillons automatiquement (Windows uniquement).")
+
+    # --- LOGIQUE POUR GÉNÉRER LE TEXTE (Affichage simple) ---
+    if btn_gen_text:
         if num_anomalies > 0:
             logins_to_notify = summary_df_final['OwnerProfileLogin'].dropna().unique()
             if len(logins_to_notify) > 0:
@@ -273,7 +283,7 @@ def page_detection_doublons(df):
                             slot2_time = row['Next_Slot.Hour'].strftime('%H:%M') if pd.notna(row['Next_Slot.Hour']) else '00:00'
                             
                             # Vol 1
-                            resa_1 = str(row['ReservationNumber']) # Utilisation de ReservationNumber
+                            resa_1 = str(row['ReservationNumber']) 
                             callsign_1 = str(row.get('Call sign', 'N/A'))
                             
                             # Vol 2
@@ -314,6 +324,90 @@ def page_detection_doublons(df):
                 st.write("Aucun login associé aux anomalies sélectionnées.")
         else:
             st.info("Aucune anomalie confirmée à signaler.")
+            
+    # --- LOGIQUE POUR OUVRIR OUTLOOK ---
+    if btn_open_outlook:
+        if num_anomalies > 0:
+            try:
+                # Importation locale pour ne pas planter l'app si non-Windows
+                import win32com.client as win32
+                import pythoncom # Nécessaire pour l'initialisation COM dans certains contextes threadés
+                
+                pythoncom.CoInitialize() # Initialisation context COM
+                outlook = win32.Dispatch('outlook.application')
+                
+                logins_to_notify = summary_df_final['OwnerProfileLogin'].dropna().unique()
+                count_opened = 0
+                
+                if len(logins_to_notify) > 0:
+                    for login in logins_to_notify:
+                        # --- (Copie de la logique de génération de texte) ---
+                        user_anomalies = summary_df_final[summary_df_final['OwnerProfileLogin'] == login]
+                        anomaly_lines_fr = []
+                        anomaly_lines_en = []
+
+                        for index, row in user_anomalies.iterrows():
+                            # Motif
+                            if row['Check'] == 'Erreur':
+                                reason_fr, reason_en = "Horaires identiques", "Identical times"
+                            elif row['Type de mouvement'] == 'Arrival':
+                                reason_fr, reason_en = "Deux 'Arrivées' consécutives", "Two consecutive 'Arrivals'"
+                            elif row['Type de mouvement'] == 'Departure':
+                                reason_fr, reason_en = "Deux 'Départs' consécutifs", "Two consecutive 'Departures'"
+                            else:
+                                reason_fr = f"Deux '{row['Type de mouvement']}' consécutifs"
+                                reason_en = f"Two consecutive '{row['Type de mouvement']}'s"
+                            
+                            # Données
+                            flight_date = row['Slot.Date'].strftime('%d/%m/%Y')
+                            immat = str(row['Immatriculation'])
+                            slot1_time = row['Slot.Hour'].strftime('%H:%M') if pd.notna(row['Slot.Hour']) else '00:00'
+                            slot2_time = row['Next_Slot.Hour'].strftime('%H:%M') if pd.notna(row['Next_Slot.Hour']) else '00:00'
+                            resa_1 = str(row['ReservationNumber']) 
+                            callsign_1 = str(row.get('Call sign', 'N/A'))
+                            resa_2 = str(row['Next_ReservationNumber']) if pd.notna(row['Next_ReservationNumber']) else "N/A"
+                            callsign_2 = str(row.get('Next_Call_sign', 'N/A'))
+                            if callsign_2 == 'nan': callsign_2 = 'N/A'
+
+                            line_1 = f"{flight_date} {slot1_time} - N° réservation: {resa_1} - Immatriculation: {immat} - Call sign: {callsign_1}"
+                            line_2 = f"{flight_date} {slot2_time} - N° réservation: {resa_2} - Immatriculation: {immat} - Call sign: {callsign_2}"
+                            
+                            anomaly_lines_fr.append(f"{line_1}\n{line_2}\nMotif : {reason_fr}\n")
+                            anomaly_lines_en.append(f"{line_1}\n{line_2}\nReason: {reason_en}\n")
+
+                        # Construction du corps
+                        mail_body = (
+                            "Bonjour,\n\n"
+                            "Nous avons remarqué les doublons suivants sous votre compte PPR :\n\n"
+                            + "\n".join(anomaly_lines_fr)
+                            + "\nNous vous remercions de bien vouloir vérifier ces PPR pour une mise en conformité de la capacité réservée.\n"
+                            + "Cordiales salutations,\n"
+                            + "\n\n______\n\n"
+                            + "Hello,\n\n"
+                            + "We have noticed the following duplicates under your PPR account:\n\n"
+                            + "\n".join(anomaly_lines_en)
+                            + "\nWe would be grateful if you could check these PPRs to ensure that the booked capacity is correct.\n"
+                            + "Best regards,"
+                        )
+                        
+                        # --- Création de l'objet Mail Outlook ---
+                        mail = outlook.CreateItem(0) # 0 = olMailItem
+                        mail.To = login # Tente d'utiliser le login comme destinataire
+                        mail.Subject = "Correction PPR - Doublons détectés / Duplicates detected"
+                        mail.Body = mail_body
+                        mail.Display() # Ouvre la fenêtre (ne pas utiliser .Send() pour sécurité)
+                        count_opened += 1
+                    
+                    st.success(f"✅ {count_opened} fenêtres Outlook ouvertes.")
+                else:
+                    st.warning("Aucun login trouvé pour les anomalies sélectionnées.")
+                    
+            except ImportError:
+                st.error("❌ Impossible de charger la bibliothèque 'pywin32'. Cette fonctionnalité nécessite que l'application tourne localement et que `pip install pywin32` soit effectué.")
+            except Exception as e:
+                st.error(f"❌ Erreur lors de l'ouverture d'Outlook : {e}")
+        else:
+            st.info("Aucune anomalie confirmée à traiter.")
             
     st.header("📋 Liste des PPR Actifs")
     active_ppr_filtered_days = active_ppr_full[active_ppr_full['Slot.Date'].isin(analysis_dates)].copy()
