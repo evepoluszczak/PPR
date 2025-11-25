@@ -371,10 +371,17 @@ def page_analyse_visuelle(df):
     vols_par_heure = df_flights.groupby(['Heure', 'Type de mouvement']).size().unstack(fill_value=0)
     vols_par_heure = vols_par_heure.reindex(range(24), fill_value=0)
     
-    if 'Arrivée' not in vols_par_heure.columns: vols_par_heure['Arrivée'] = 0
-    if 'Départ' not in vols_par_heure.columns: vols_par_heure['Départ'] = 0
-    if 'Arrival' in vols_par_heure.columns: vols_par_heure.rename(columns={'Arrival': 'Arrivées'}, inplace=True)
-    if 'Departure' in vols_par_heure.columns: vols_par_heure.rename(columns={'Departure': 'Départs'}, inplace=True)
+    # Correction : Renommer d'abord les colonnes existantes pour éviter les doublons (Arrivée vs Arrivées)
+    if 'Arrival' in vols_par_heure.columns:
+        vols_par_heure.rename(columns={'Arrival': 'Arrivées'}, inplace=True)
+    if 'Departure' in vols_par_heure.columns:
+        vols_par_heure.rename(columns={'Departure': 'Départs'}, inplace=True)
+
+    # Ensuite, assurer que les colonnes existent (avec le nom au pluriel)
+    if 'Arrivées' not in vols_par_heure.columns:
+        vols_par_heure['Arrivées'] = 0
+    if 'Départs' not in vols_par_heure.columns:
+        vols_par_heure['Départs'] = 0
 
     if show_rwy_check:
         df_rwy = df_jour[df_jour['Call sign'] == 'RWYCHK']
